@@ -6,6 +6,7 @@ import com.browser.client.data.local.ClearPassDatabase
 import com.browser.client.data.preferences.BrowserPreferencesRepository
 import com.browser.client.data.repository.BrowserDataRepository
 import com.browser.client.data.repository.ClearanceRepository
+import com.browser.client.engine.BrowserDownloadEngine
 import com.browser.client.engine.CloudflareClearanceEngine
 import com.browser.client.engine.NetworkMonitor
 import com.browser.client.engine.SessionFingerprintManager
@@ -26,6 +27,10 @@ class AppContainer(application: Application) {
     val clearanceEngine = CloudflareClearanceEngine(
         repository = clearanceRepository,
         fingerprintManager = fingerprintManager
+    )
+    val downloadEngine = BrowserDownloadEngine(
+        context = application,
+        repository = browserDataRepository
     )
     val webViewPool = WebViewPool(
         context = application,

@@ -11,7 +11,6 @@ import androidx.lifecycle.viewModelScope
 import com.browser.client.AppContainer
 import com.browser.client.data.local.BookmarkEntity
 import com.browser.client.data.local.ClearanceEntity
-import com.browser.client.data.local.DownloadEntity
 import com.browser.client.data.local.HistoryEntity
 import com.browser.client.data.preferences.BrowserSettings
 import com.browser.client.data.preferences.JsSecurityMode
@@ -21,13 +20,19 @@ import com.browser.client.engine.ClearanceCaptureResult
 import com.browser.client.engine.DefaultBrowserHelper
 import com.browser.client.engine.DomainClearanceStatus
 import com.browser.client.engine.DomainUtils
+import com.browser.client.engine.DownloadProgressSnapshot
+import com.browser.client.engine.DownloadTaskStatus
 import com.browser.client.engine.NetworkStatus
+import com.browser.client.engine.ReaderArticle
 import com.browser.client.engine.WebTabCallbacks
+import com.browser.client.engine.toSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -57,6 +62,9 @@ data class BrowserTabState(
     val canGoBack: Boolean = false,
     val canGoForward: Boolean = false,
     val isDesktopMode: Boolean = false,
+    val isReaderMode: Boolean = false,
+    val isExtractingReader: Boolean = false,
+    val readerArticle: ReaderArticle? = null,
     val clearanceStatus: DomainClearanceStatus = DomainClearanceStatus.NONE,
     val activeDomain: String = "",
     val pendingUrlToLoad: String? = null,
@@ -71,6 +79,8 @@ data class BrowserUiState(
     val activeOverlay: BrowserOverlay = BrowserOverlay.NONE,
     val findInPageVisible: Boolean = false,
     val findInPageQuery: String = "",
+    val readerFontScale: Float = 1.0f,
+    val readerSepiaPaper: Boolean = false,
     val isDefaultBrowser: Boolean = false,
     val snackbarMessage: String? = null
 ) {
@@ -111,8 +121,24 @@ class BrowserViewModel(
     val recentHistory: StateFlow<List<HistoryEntity>> = container.browserDataRepository.recentHistory
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val downloads: StateFlow<List<DownloadEntity>> = container.browserDataRepository.allDownloads
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val downloadItems: StateFlow<List<DownloadProgressSnapshot>> = combine(
+        container.browserDataRepository.allDownloads,
+        container.downloadEngine.activeDownloads,
+        container.downloadEngine.incognitoDownloads
+    ) { entities, activeMap, incognitoList ->
+        val normalItems = entities.map { entity ->
+            activeMap[entity.id] ?: entity.toSnapshot()
+        }
+        incognitoList + normalItems
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val activeDownloadCount: StateFlow<Int> = downloadItems
+        .map { items ->
+            items.count {
+                it.status == DownloadTaskStatus.QUEUED || it.status == DownloadTaskStatus.DOWNLOADING
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
     var onRequestFileChooser: ((WebChromeClient.FileChooserParams?) -> Unit)? = null
@@ -199,6 +225,9 @@ class BrowserViewModel(
                 isHome = false,
                 isLoading = true,
                 progress = 10,
+                isReaderMode = false,
+                isExtractingReader = false,
+                readerArticle = null,
                 activeDomain = domain,
                 clearanceStatus = initialStatus,
                 pendingUrlToLoad = url,
@@ -336,6 +365,7 @@ class BrowserViewModel(
             container.webViewPool.removeWebView(tab.id)
         }
         container.webViewPool.shredIncognitoArtifacts()
+        container.downloadEngine.shredIncognitoDownloads()
         _uiState.update { state ->
             val remainingNormal = state.tabs.filterNot { it.isIncognito }
             if (remainingNormal.isEmpty()) {
@@ -380,7 +410,12 @@ class BrowserViewModel(
     }
 
     fun closeTab(tabId: String) {
+        val closingTab = _uiState.value.tabs.firstOrNull { it.id == tabId }
         container.webViewPool.removeWebView(tabId)
+        val remainingAfter = _uiState.value.tabs.filterNot { it.id == tabId }
+        if (closingTab?.isIncognito == true && remainingAfter.none { it.isIncognito }) {
+            container.downloadEngine.shredIncognitoDownloads()
+        }
         _uiState.update { state ->
             val remaining = state.tabs.filterNot { it.id == tabId }
             if (remaining.isEmpty()) {
@@ -409,6 +444,10 @@ class BrowserViewModel(
     fun goBack(): Boolean {
         val tab = _uiState.value.activeTab
         if (tab.isHome) return false
+        if (tab.isReaderMode) {
+            updateTab(tab.id) { it.copy(isReaderMode = false) }
+            return true
+        }
         if (tab.offlineErrorUrl != null) {
             goHome()
             return true
@@ -447,6 +486,7 @@ class BrowserViewModel(
             wv.stopLoading()
             updateTab(tab.id) { it.copy(isLoading = false, progress = 100) }
         } else {
+            updateTab(tab.id) { it.copy(isReaderMode = false, readerArticle = null) }
             container.clearanceEngine.prepareForUrl(
                 webView = wv,
                 url = tab.url,
@@ -465,6 +505,9 @@ class BrowserViewModel(
                 isHome = true,
                 isLoading = false,
                 progress = 0,
+                isReaderMode = false,
+                isExtractingReader = false,
+                readerArticle = null,
                 title = if (it.isIncognito) "Private Tab" else "Start Page",
                 clearanceStatus = DomainClearanceStatus.NONE,
                 offlineErrorUrl = null
@@ -478,6 +521,41 @@ class BrowserViewModel(
                 findInPageQuery = ""
             )
         }
+    }
+
+    fun toggleReaderMode() {
+        val tab = _uiState.value.activeTab
+        if (tab.isHome || tab.offlineErrorUrl != null) return
+        if (tab.isReaderMode) {
+            updateTab(tab.id) { it.copy(isReaderMode = false, isExtractingReader = false) }
+            return
+        }
+        updateTab(tab.id) { it.copy(isExtractingReader = true) }
+        container.webViewPool.extractReadableArticle(tab.id, tab.url) { article ->
+            updateTab(tab.id) {
+                it.copy(
+                    isReaderMode = true,
+                    isExtractingReader = false,
+                    readerArticle = article
+                )
+            }
+        }
+    }
+
+    fun increaseReaderFont() {
+        _uiState.update { state ->
+            state.copy(readerFontScale = (state.readerFontScale + 0.12f).coerceAtMost(1.6f))
+        }
+    }
+
+    fun decreaseReaderFont() {
+        _uiState.update { state ->
+            state.copy(readerFontScale = (state.readerFontScale - 0.12f).coerceAtLeast(0.8f))
+        }
+    }
+
+    fun toggleReaderSepia() {
+        _uiState.update { state -> state.copy(readerSepiaPaper = !state.readerSepiaPaper) }
     }
 
     fun toggleDesktopMode() {
@@ -716,6 +794,8 @@ class BrowserViewModel(
                 isHome = false,
                 isLoading = true,
                 progress = 15,
+                isReaderMode = if (tab.url != url) false else tab.isReaderMode,
+                readerArticle = if (tab.url != url) null else tab.readerArticle,
                 activeDomain = domain,
                 offlineErrorUrl = null
             )
@@ -806,40 +886,61 @@ class BrowserViewModel(
         return onRequestFileChooser != null
     }
 
-    fun deleteDownloadItem(id: Long) {
-        viewModelScope.launch {
-            container.browserDataRepository.deleteDownloadItem(id)
+    fun pauseDownload(id: Long) {
+        container.downloadEngine.pauseDownload(id)
+    }
+
+    fun resumeDownload(id: Long) {
+        if (!container.networkMonitor.isOnlineNow()) {
+            showMessage("No internet connection to resume download")
+            return
         }
+        container.downloadEngine.resumeDownload(id)
+    }
+
+    fun cancelDownload(id: Long) {
+        container.downloadEngine.cancelDownload(id)
+    }
+
+    fun retryDownload(id: Long) {
+        if (!container.networkMonitor.isOnlineNow()) {
+            showMessage("No internet connection to retry download")
+            return
+        }
+        container.downloadEngine.retryDownload(id)
+    }
+
+    fun deleteDownloadItem(id: Long) {
+        container.downloadEngine.deleteDownload(id)
     }
 
     fun clearDownloadsHistory() {
-        viewModelScope.launch {
-            container.browserDataRepository.clearDownloadsHistory()
-            showMessage("Browser download history cleared")
-        }
+        container.downloadEngine.clearDownloadsHistory()
+        showMessage("Browser download history cleared")
     }
 
     override fun onDownloadRequested(
         fileName: String,
         url: String,
+        userAgent: String,
         mimeType: String,
         contentLength: Long,
-        downloadManagerId: Long
+        isIncognito: Boolean
     ) {
-        val isIncognito = _uiState.value.activeTab.isIncognito
-        if (!isIncognito) {
-            viewModelScope.launch {
-                container.browserDataRepository.recordDownload(
-                    fileName = fileName,
-                    url = url,
-                    mimeType = mimeType,
-                    contentLength = contentLength,
-                    downloadManagerId = downloadManagerId
-                )
-            }
+        if (!container.networkMonitor.isOnlineNow()) {
+            showMessage("No internet connection for downloading $fileName")
+            return
         }
+        container.downloadEngine.startDownload(
+            fileName = fileName,
+            url = url,
+            userAgent = userAgent,
+            mimeType = mimeType,
+            contentLength = contentLength,
+            isIncognito = isIncognito
+        )
         showMessage(
-            if (isIncognito) "Downloading $fileName (not logged in history)"
+            if (isIncognito) "Downloading $fileName (Private session — not saved to history)"
             else "Downloading $fileName"
         )
     }

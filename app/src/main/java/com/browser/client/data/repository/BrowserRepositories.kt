@@ -98,24 +98,55 @@ class BrowserDataRepository(
 
     suspend fun clearHistory() = historyDao.clearAll()
 
-    suspend fun recordDownload(
+    suspend fun createDownloadRecord(
         fileName: String,
         url: String,
         mimeType: String,
         contentLength: Long,
-        downloadManagerId: Long
-    ) {
-        downloadDao.insert(
+        localFilePath: String,
+        status: String
+    ): Long {
+        return downloadDao.insert(
             DownloadEntity(
                 fileName = fileName.ifBlank { "downloaded_file" },
                 url = url,
                 domain = DomainUtils.extractHost(url),
                 mimeType = mimeType.ifBlank { "application/octet-stream" },
                 contentLength = contentLength,
-                downloadManagerId = downloadManagerId
+                downloadManagerId = -1L,
+                localFilePath = localFilePath,
+                bytesDownloaded = 0L,
+                status = status,
+                errorMessage = ""
             )
         )
     }
+
+    suspend fun updateDownloadState(
+        id: Long,
+        fileName: String,
+        mimeType: String,
+        bytesDownloaded: Long,
+        contentLength: Long,
+        status: String,
+        localFilePath: String,
+        errorMessage: String = ""
+    ) {
+        downloadDao.updateState(
+            id = id,
+            fileName = fileName,
+            mimeType = mimeType,
+            bytesDownloaded = bytesDownloaded,
+            contentLength = contentLength,
+            status = status,
+            localFilePath = localFilePath,
+            errorMessage = errorMessage
+        )
+    }
+
+    suspend fun getDownloadById(id: Long): DownloadEntity? = downloadDao.getById(id)
+
+    suspend fun getAllDownloadsOnce(): List<DownloadEntity> = downloadDao.getAllOnce()
 
     suspend fun deleteDownloadItem(id: Long) = downloadDao.deleteById(id)
 

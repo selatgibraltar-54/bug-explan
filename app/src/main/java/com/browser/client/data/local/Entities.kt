@@ -47,5 +47,9 @@ data class DownloadEntity(
     val mimeType: String,
     val contentLength: Long = -1L,
     val downloadManagerId: Long = -1L,
-    val downloadedAt: Long = System.currentTimeMillis()
+    val downloadedAt: Long = System.currentTimeMillis(),
+    val localFilePath: String = "",
+    val bytesDownloaded: Long = 0L,
+    val status: String = "COMPLETED",
+    val errorMessage: String = ""
 )

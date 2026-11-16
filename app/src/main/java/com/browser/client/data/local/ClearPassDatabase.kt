@@ -14,7 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         HistoryEntity::class,
         DownloadEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class ClearPassDatabase : RoomDatabase() {
@@ -46,6 +46,15 @@ abstract class ClearPassDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `localFilePath` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `bytesDownloaded` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `status` TEXT NOT NULL DEFAULT 'COMPLETED'")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `errorMessage` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getInstance(context: Context): ClearPassDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -53,7 +62,7 @@ abstract class ClearPassDatabase : RoomDatabase() {
                     ClearPassDatabase::class.java,
                     "clearpass_browser.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }

@@ -33,6 +33,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.Close
@@ -59,12 +60,13 @@ import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.WifiOff
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -106,6 +108,7 @@ fun OmniboxBar(
     isEditingAddress: Boolean,
     tabCount: Int,
     vaultCount: Int,
+    activeDownloadCount: Int = 0,
     isBookmarked: Boolean,
     findInPageVisible: Boolean,
     findInPageQuery: String,
@@ -121,6 +124,7 @@ fun OmniboxBar(
     onSearchImageNewTab: () -> Unit,
     onToggleBookmark: () -> Unit,
     onToggleDesktopMode: () -> Unit,
+    onToggleReaderMode: () -> Unit,
     onToggleFindInPage: () -> Unit,
     onFindQueryChange: (String) -> Unit,
     onFindNext: (Boolean) -> Unit,
@@ -385,6 +389,25 @@ fun OmniboxBar(
                                     )
                                 }
                             }
+                            if (tab.offlineErrorUrl == null) {
+                                IconButton(
+                                    onClick = onToggleReaderMode,
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .testTag("omnibox_reader_mode_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.AutoStories,
+                                        contentDescription = if (tab.isReaderMode) "Exit Reader Mode" else "Reader Mode",
+                                        tint = if (tab.isReaderMode) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
                             IconButton(
                                 onClick = onReloadOrStop,
                                 modifier = Modifier
@@ -440,11 +463,24 @@ fun OmniboxBar(
                             .size(40.dp)
                             .testTag("browser_menu_button")
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.MoreVert,
-                            contentDescription = stringResource(R.string.cd_menu),
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
+                        BadgedBox(
+                            badge = {
+                                if (activeDownloadCount > 0) {
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.secondary,
+                                        contentColor = MaterialTheme.colorScheme.onSecondary
+                                    ) {
+                                        Text(activeDownloadCount.toString())
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.MoreVert,
+                                contentDescription = stringResource(R.string.cd_menu),
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
 
                     DropdownMenu(
@@ -510,6 +546,22 @@ fun OmniboxBar(
                                 onClick = {
                                     menuExpanded = false
                                     onToggleBookmark()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(if (tab.isReaderMode) "Reader Mode (On)" else "Reader Mode")
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Rounded.AutoStories,
+                                        contentDescription = null,
+                                        tint = if (tab.isReaderMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    onToggleReaderMode()
                                 }
                             )
                             DropdownMenuItem(
@@ -583,7 +635,12 @@ fun OmniboxBar(
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Downloads") },
+                            text = {
+                                Text(
+                                    if (activeDownloadCount > 0) "Downloads ($activeDownloadCount active)"
+                                    else "Downloads"
+                                )
+                            },
                             leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
                             onClick = {
                                 menuExpanded = false
@@ -783,19 +840,16 @@ fun OmniboxBar(
                 }
             }
 
-            // Loading progress line
-            if (tab.isLoading && tab.progress in 1..99) {
-                LinearProgressIndicator(
-                    progress = { tab.progress / 100f },
+            // Windows XP style segmented loading progress bar
+            if (tab.isLoading) {
+                val xpProgress = if (tab.progress in 1..99) tab.progress / 100f else null
+                WinXpProgressBar(
+                    progress = xpProgress,
+                    height = 8.dp,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(2.5.dp),
-                    color = if (tab.clearanceStatus == DomainClearanceStatus.VERIFYING_1X) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.secondary
-                    },
-                    trackColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                        .testTag("omnibox_winxp_progress")
                 )
             }
         }

@@ -74,8 +74,38 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads ORDER BY downloadedAt DESC")
     fun observeAllDownloads(): Flow<List<DownloadEntity>>
 
+    @Query("SELECT * FROM downloads ORDER BY downloadedAt DESC")
+    suspend fun getAllOnce(): List<DownloadEntity>
+
+    @Query("SELECT * FROM downloads WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): DownloadEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(download: DownloadEntity)
+    suspend fun insert(download: DownloadEntity): Long
+
+    @Query(
+        """
+        UPDATE downloads 
+        SET fileName = :fileName,
+            mimeType = :mimeType,
+            bytesDownloaded = :bytesDownloaded,
+            contentLength = :contentLength,
+            status = :status,
+            localFilePath = :localFilePath,
+            errorMessage = :errorMessage
+        WHERE id = :id
+        """
+    )
+    suspend fun updateState(
+        id: Long,
+        fileName: String,
+        mimeType: String,
+        bytesDownloaded: Long,
+        contentLength: Long,
+        status: String,
+        localFilePath: String,
+        errorMessage: String
+    )
 
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun deleteById(id: Long)

@@ -1,7 +1,6 @@
 package com.browser.client.engine
 
 import android.annotation.SuppressLint
-import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -9,7 +8,6 @@ import android.content.MutableContextWrapper
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.os.Message
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -45,9 +43,10 @@ interface WebTabCallbacks {
     fun onDownloadRequested(
         fileName: String,
         url: String,
+        userAgent: String,
         mimeType: String,
         contentLength: Long,
-        downloadManagerId: Long
+        isIncognito: Boolean
     )
 }
 
@@ -121,7 +120,15 @@ class WebViewPool(
             cm.setAcceptThirdPartyCookies(this, !isIncognito)
 
             setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
-                handleDownload(url, userAgent, contentDisposition, mimeType, contentLength, callbacks)
+                handleDownload(
+                    url = url,
+                    userAgent = userAgent,
+                    contentDisposition = contentDisposition,
+                    mimeType = mimeType,
+                    contentLength = contentLength,
+                    isIncognito = isIncognito,
+                    callbacks = callbacks
+                )
             }
 
             webViewClient = object : WebViewClient() {
@@ -333,6 +340,21 @@ class WebViewPool(
 
     fun getExistingWebView(tabId: String): WebView? = webViews[tabId]
 
+    fun extractReadableArticle(
+        tabId: String,
+        fallbackUrl: String,
+        onResult: (ReaderArticle) -> Unit
+    ) {
+        val wv = webViews[tabId]
+        if (wv == null) {
+            onResult(ReaderModeExtractor.parseExtractedJson(null, fallbackUrl))
+            return
+        }
+        wv.evaluateJavascript(ReaderModeExtractor.EXTRACT_ARTICLE_JS) { raw ->
+            onResult(ReaderModeExtractor.parseExtractedJson(raw, wv.url ?: fallbackUrl))
+        }
+    }
+
     fun loadUrl(
         tabId: String,
         url: String,
@@ -479,33 +501,24 @@ class WebViewPool(
         contentDisposition: String,
         mimeType: String,
         contentLength: Long,
+        isIncognito: Boolean,
         callbacks: WebTabCallbacks
     ) {
-        try {
-            val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
-            val request = DownloadManager.Request(Uri.parse(url)).apply {
-                setMimeType(mimeType)
-                val cookies = CookieManager.getInstance().getCookie(url)
-                if (!cookies.isNullOrBlank()) {
-                    addRequestHeader("Cookie", cookies)
-                }
-                addRequestHeader("User-Agent", userAgent)
-                setTitle(fileName)
-                setDescription("Downloading via ClearPass Browser")
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
-            }
-            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
-            val downloadId = dm?.enqueue(request) ?: -1L
-            callbacks.onDownloadRequested(
-                fileName = fileName,
-                url = url,
-                mimeType = mimeType,
-                contentLength = contentLength,
-                downloadManagerId = downloadId
-            )
-        } catch (_: Exception) {
-            // Ignore malformed download URLs
+        if (!url.startsWith("http://", ignoreCase = true) &&
+            !url.startsWith("https://", ignoreCase = true)
+        ) {
+            return
         }
+        val fileName = runCatching {
+            URLUtil.guessFileName(url, contentDisposition, mimeType)
+        }.getOrDefault("download")
+        callbacks.onDownloadRequested(
+            fileName = fileName,
+            url = url,
+            userAgent = userAgent,
+            mimeType = mimeType,
+            contentLength = contentLength,
+            isIncognito = isIncognito
+        )
     }
 }

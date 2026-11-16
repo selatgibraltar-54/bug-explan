@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path
+        name="browser_downloads"
+        path="browser_downloads/" />
+    <files-path
+        name="incognito_downloads"
+        path="incognito_downloads/" />
+</paths>

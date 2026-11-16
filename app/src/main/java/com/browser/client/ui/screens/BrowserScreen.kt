@@ -53,6 +53,7 @@ import com.browser.client.ui.BrowserOverlay
 import com.browser.client.ui.BrowserViewModel
 import com.browser.client.ui.components.OfflineErrorView
 import com.browser.client.ui.components.OmniboxBar
+import com.browser.client.ui.components.ReaderModeView
 import com.browser.client.ui.components.StartPage
 import com.browser.client.ui.components.WebViewContainer
 
@@ -70,7 +71,8 @@ fun BrowserScreen(
     val pinnedBookmarks by viewModel.pinnedBookmarks.collectAsStateWithLifecycle()
     val allBookmarks by viewModel.allBookmarks.collectAsStateWithLifecycle()
     val recentHistory by viewModel.recentHistory.collectAsStateWithLifecycle()
-    val downloads by viewModel.downloads.collectAsStateWithLifecycle()
+    val downloadItems by viewModel.downloadItems.collectAsStateWithLifecycle()
+    val activeDownloadCount by viewModel.activeDownloadCount.collectAsStateWithLifecycle()
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -110,6 +112,7 @@ fun BrowserScreen(
                     isEditingAddress = uiState.isEditingAddress,
                     tabCount = uiState.tabs.size,
                     vaultCount = clearances.size,
+                    activeDownloadCount = activeDownloadCount,
                     isBookmarked = isBookmarked,
                     findInPageVisible = uiState.findInPageVisible,
                     findInPageQuery = uiState.findInPageQuery,
@@ -125,6 +128,7 @@ fun BrowserScreen(
                     onSearchImageNewTab = viewModel::openImageSearchInNewTab,
                     onToggleBookmark = viewModel::toggleCurrentBookmark,
                     onToggleDesktopMode = viewModel::toggleDesktopMode,
+                    onToggleReaderMode = viewModel::toggleReaderMode,
                     onToggleFindInPage = viewModel::toggleFindInPage,
                     onFindQueryChange = viewModel::updateFindQuery,
                     onFindNext = viewModel::findNext,
@@ -193,16 +197,37 @@ fun BrowserScreen(
                         )
                     }
                     else -> {
-                        WebViewContainer(
-                            tabId = activeTab.id,
-                            isIncognito = activeTab.isIncognito,
-                            isDesktopMode = activeTab.isDesktopMode,
-                            pendingUrlToLoad = activeTab.pendingUrlToLoad,
-                            webViewPool = webViewPool,
-                            settingsProvider = { settings },
-                            callbacks = viewModel,
-                            onConsumePendingLoad = viewModel::consumePendingLoad
-                        )
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            WebViewContainer(
+                                tabId = activeTab.id,
+                                isIncognito = activeTab.isIncognito,
+                                isDesktopMode = activeTab.isDesktopMode,
+                                pendingUrlToLoad = activeTab.pendingUrlToLoad,
+                                webViewPool = webViewPool,
+                                settingsProvider = { settings },
+                                callbacks = viewModel,
+                                onConsumePendingLoad = viewModel::consumePendingLoad
+                            )
+                            AnimatedVisibility(
+                                visible = activeTab.isReaderMode && activeTab.readerArticle != null,
+                                enter = fadeIn(),
+                                exit = fadeOut()
+                            ) {
+                                activeTab.readerArticle?.let { article ->
+                                    ReaderModeView(
+                                        article = article,
+                                        url = activeTab.url,
+                                        fontScale = uiState.readerFontScale,
+                                        isSepiaPaper = uiState.readerSepiaPaper && !activeTab.isIncognito,
+                                        isIncognito = activeTab.isIncognito,
+                                        onDecreaseFont = viewModel::decreaseReaderFont,
+                                        onIncreaseFont = viewModel::increaseReaderFont,
+                                        onToggleSepia = viewModel::toggleReaderSepia,
+                                        onExitReaderMode = viewModel::toggleReaderMode
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -284,8 +309,12 @@ fun BrowserScreen(
             exit = fadeOut()
         ) {
             DownloadsScreen(
-                downloads = downloads,
+                downloads = downloadItems,
                 onBack = viewModel::closeOverlay,
+                onPauseDownload = viewModel::pauseDownload,
+                onResumeDownload = viewModel::resumeDownload,
+                onCancelDownload = viewModel::cancelDownload,
+                onRetryDownload = viewModel::retryDownload,
                 onDeleteDownload = viewModel::deleteDownloadItem,
                 onClearAll = viewModel::clearDownloadsHistory,
                 onShowMessage = viewModel::showMessage
