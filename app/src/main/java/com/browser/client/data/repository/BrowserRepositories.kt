@@ -1,0 +1,123 @@
+package com.browser.client.data.repository
+
+import com.browser.client.data.local.BookmarkDao
+import com.browser.client.data.local.BookmarkEntity
+import com.browser.client.data.local.ClearanceDao
+import com.browser.client.data.local.ClearanceEntity
+import com.browser.client.data.local.DownloadDao
+import com.browser.client.data.local.DownloadEntity
+import com.browser.client.data.local.HistoryDao
+import com.browser.client.data.local.HistoryEntity
+import com.browser.client.engine.DomainUtils
+import kotlinx.coroutines.flow.Flow
+
+class ClearanceRepository(private val clearanceDao: ClearanceDao) {
+    val allClearances: Flow<List<ClearanceEntity>> = clearanceDao.observeAllClearances()
+
+    suspend fun getAllOnce(): List<ClearanceEntity> = clearanceDao.getAllClearancesOnce()
+
+    suspend fun getByDomain(domain: String): ClearanceEntity? = clearanceDao.getByDomain(domain)
+
+    suspend fun upsert(entity: ClearanceEntity) = clearanceDao.upsert(entity)
+
+    suspend fun markReused(domain: String) =
+        clearanceDao.markReused(domain, System.currentTimeMillis())
+
+    suspend fun deleteByDomain(domain: String) = clearanceDao.deleteByDomain(domain)
+
+    suspend fun clearAll() = clearanceDao.clearAll()
+}
+
+class BrowserDataRepository(
+    private val bookmarkDao: BookmarkDao,
+    private val historyDao: HistoryDao,
+    private val downloadDao: DownloadDao
+) {
+    val allBookmarks: Flow<List<BookmarkEntity>> = bookmarkDao.observeAllBookmarks()
+    val pinnedBookmarks: Flow<List<BookmarkEntity>> = bookmarkDao.observePinnedBookmarks()
+    val recentHistory: Flow<List<HistoryEntity>> = historyDao.observeRecentHistory()
+    val allDownloads: Flow<List<DownloadEntity>> = downloadDao.observeAllDownloads()
+
+    suspend fun ensureDefaultBookmarksSeeded() {
+        if (bookmarkDao.countBookmarks() == 0) {
+            val defaults = listOf(
+                BookmarkEntity(
+                    title = "YouTube",
+                    url = "https://www.youtube.com",
+                    domain = "youtube.com",
+                    isPinned = true
+                ),
+                BookmarkEntity(
+                    title = "Instagram",
+                    url = "https://www.instagram.com",
+                    domain = "instagram.com",
+                    isPinned = true
+                ),
+                BookmarkEntity(
+                    title = "Facebook",
+                    url = "https://www.facebook.com",
+                    domain = "facebook.com",
+                    isPinned = true
+                )
+            )
+            defaults.forEach { bookmarkDao.insert(it) }
+        }
+    }
+
+    suspend fun addBookmark(title: String, url: String, isPinned: Boolean = true) {
+        val cleanTitle = title.ifBlank { DomainUtils.extractHost(url).ifBlank { url } }
+        val domain = DomainUtils.extractHost(url)
+        bookmarkDao.insert(
+            BookmarkEntity(
+                title = cleanTitle,
+                url = url,
+                domain = domain,
+                isPinned = isPinned
+            )
+        )
+    }
+
+    suspend fun removeBookmarkByUrl(url: String) = bookmarkDao.deleteByUrl(url)
+
+    suspend fun removeBookmarkById(id: Long) = bookmarkDao.deleteById(id)
+
+    suspend fun recordHistory(title: String, url: String, wasCfProtected: Boolean) {
+        if (url.isBlank() || url.startsWith("about:")) return
+        val domain = DomainUtils.extractHost(url)
+        historyDao.insert(
+            HistoryEntity(
+                title = title.ifBlank { domain.ifBlank { url } },
+                url = url,
+                domain = domain,
+                wasCfProtected = wasCfProtected
+            )
+        )
+    }
+
+    suspend fun deleteHistoryItem(id: Long) = historyDao.deleteById(id)
+
+    suspend fun clearHistory() = historyDao.clearAll()
+
+    suspend fun recordDownload(
+        fileName: String,
+        url: String,
+        mimeType: String,
+        contentLength: Long,
+        downloadManagerId: Long
+    ) {
+        downloadDao.insert(
+            DownloadEntity(
+                fileName = fileName.ifBlank { "downloaded_file" },
+                url = url,
+                domain = DomainUtils.extractHost(url),
+                mimeType = mimeType.ifBlank { "application/octet-stream" },
+                contentLength = contentLength,
+                downloadManagerId = downloadManagerId
+            )
+        )
+    }
+
+    suspend fun deleteDownloadItem(id: Long) = downloadDao.deleteById(id)
+
+    suspend fun clearDownloadsHistory() = downloadDao.clearAll()
+}

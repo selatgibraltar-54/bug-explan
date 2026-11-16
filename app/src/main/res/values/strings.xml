@@ -1,0 +1,34 @@
+<resources>
+    <string name="app_name">ClearPass Browser</string>
+    <string name="tagline">One-time verification. Persistent clearance.</string>
+    <string name="search_or_url_placeholder">Search or enter website address</string>
+    <string name="clearance_vault_title">Clearance Vault</string>
+    <string name="bookmarks_title">Bookmarks &amp; History</string>
+    <string name="tabs_title">Open Tabs</string>
+    <string name="settings_title">Settings</string>
+    <string name="customize_starter_title">Customize Starter Page</string>
+    <string name="default_browser_active">Default Browser Active</string>
+    <string name="set_default_browser">Set as Default Browser</string>
+    <string name="status_verifying">Cloudflare Check • Verifying 1x</string>
+    <string name="status_verified">Cleared 1x • Vault Protected</string>
+    <string name="status_restored">Clearance Restored • Skipped Re-Verify</string>
+    <string name="offline_title">No Internet Connection</string>
+    <string name="cd_back">Navigate back</string>
+    <string name="cd_forward">Navigate forward</string>
+    <string name="cd_reload">Reload page</string>
+    <string name="cd_stop">Stop loading</string>
+    <string name="cd_home">Home page</string>
+    <string name="cd_tabs">Switch tabs</string>
+    <string name="cd_new_tab">Open new tab</string>
+    <string name="cd_close_tab">Close tab</string>
+    <string name="cd_vault">Open Clearance Vault</string>
+    <string name="cd_menu">Open browser menu</string>
+    <string name="cd_shield_status">Site security and clearance status</string>
+    <string name="cd_bookmark">Toggle bookmark</string>
+    <string name="cd_clear_input">Clear address bar</string>
+    <string name="cd_close_sheet">Close panel</string>
+    <string name="cd_image_search">Search image on new tab</string>
+    <string name="incognito_placeholder">Private search or enter URL</string>
+    <string name="cd_new_incognito_tab">Open new incognito tab</string>
+    <string name="cd_shred_incognito">Shred incognito session</string>
+</resources>

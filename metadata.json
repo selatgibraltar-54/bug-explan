@@ -1,0 +1,6 @@
+{
+  "name": "ClearPass Browser",
+  "description": "A fast Android browser with persistent one-time Cloudflare verification vault and full default browser support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
