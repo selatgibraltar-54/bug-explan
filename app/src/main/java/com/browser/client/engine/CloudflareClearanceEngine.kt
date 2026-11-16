@@ -133,7 +133,8 @@ class CloudflareClearanceEngine(
         isChallengeDomDetected: Boolean,
         settings: BrowserSettings,
         isDesktopMode: Boolean,
-        isIncognito: Boolean = false
+        isIncognito: Boolean = false,
+        hasCloudflareNetworkSignal: Boolean = false
     ): ClearanceCaptureResult {
         val host = DomainUtils.extractHost(url)
         val rootDomain = DomainUtils.extractRootDomain(host)
@@ -206,6 +207,19 @@ class CloudflareClearanceEngine(
         if (isChallengeDomDetected) {
             return ClearanceCaptureResult(
                 status = DomainClearanceStatus.VERIFYING_1X,
+                domain = rootDomain.ifBlank { host },
+                newlyCaptured = false
+            )
+        }
+
+        val hasAnyCloudflarePresence = hasCloudflareNetworkSignal ||
+            isChallengeDomDetected ||
+            !cfClearance.isNullOrBlank() ||
+            !cfBm.isNullOrBlank()
+
+        if (!hasAnyCloudflarePresence) {
+            return ClearanceCaptureResult(
+                status = DomainClearanceStatus.NONE,
                 domain = rootDomain.ifBlank { host },
                 newlyCaptured = false
             )
@@ -302,19 +316,35 @@ class CloudflareClearanceEngine(
     }
 
     companion object {
+        fun isCloudflareChallengeRequest(url: String?): Boolean {
+            if (url.isNullOrBlank()) return false
+            val lower = url.lowercase()
+            val host = DomainUtils.extractHost(lower)
+            if (host == "challenges.cloudflare.com" || host.endsWith(".challenges.cloudflare.com")) {
+                return true
+            }
+            return lower.contains("/cdn-cgi/challenge-platform") ||
+                lower.contains("/cdn-cgi/bm/cv") ||
+                lower.contains("/cdn-cgi/l/chk_captcha")
+        }
+
         const val CF_DETECTION_JS = """
             (function() {
                 try {
                     var title = (document.title || '').toLowerCase();
-                    var href = (window.location && window.location.href) ? window.location.href : '';
+                    var href = (window.location && window.location.href) ? window.location.href.toLowerCase() : '';
                     var hasCfDom = !!(document.querySelector(
-                        'input[name="cf-turnstile-response"], .cf-turnstile, #challenge-form, #cf-challenge-running, #challenge-stage, iframe[src*="challenges.cloudflare.com"]'
+                        'input[name="cf-turnstile-response"], .cf-turnstile, #challenge-form, #cf-challenge-running, #challenge-stage, #cf-wrapper, .cf-browser-verification, iframe[src*="challenges.cloudflare.com"], script[src*="challenges.cloudflare.com"], script[src*="/cdn-cgi/challenge-platform"]'
                     ));
-                    var hasCfTitle = title.indexOf('just a moment') !== -1 ||
-                        title.indexOf('attention required') !== -1 ||
-                        title.indexOf('one more step') !== -1;
-                    var hasCfObj = typeof window._cf_chl_opt !== 'undefined';
+                    var hasCfObj = typeof window._cf_chl_opt !== 'undefined' || typeof window.turnstile !== 'undefined';
                     var isCfPath = href.indexOf('/cdn-cgi/challenge-platform') !== -1;
+                    var bodyText = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : '';
+                    var hasCfBranding = bodyText.indexOf('cloudflare') !== -1 || bodyText.indexOf('ray id:') !== -1;
+                    var hasCfTitle = hasCfBranding && (
+                        title.indexOf('just a moment') !== -1 ||
+                        title.indexOf('attention required') !== -1 ||
+                        title.indexOf('one more step') !== -1
+                    );
                     return (hasCfDom || hasCfTitle || hasCfObj || isCfPath) ? 'CHALLENGE' : 'CLEAR';
                 } catch (e) {
                     return 'CLEAR';

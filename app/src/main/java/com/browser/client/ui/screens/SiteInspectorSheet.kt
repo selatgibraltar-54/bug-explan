@@ -218,9 +218,15 @@ fun SiteInspectorSheet(
                                 label = "Locked Profile",
                                 value = if (clearanceEntity.isDesktopMode) "Desktop Chrome" else "Clean Mobile Chrome"
                             )
+                        } else if (tab.clearanceStatus == DomainClearanceStatus.VERIFYING_1X) {
+                            Text(
+                                text = "Cloudflare verification is running on this page. Vortex will save the clearance cookie once completed.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         } else {
                             Text(
-                                text = "If this site runs a Cloudflare Turnstile or 'Just a moment' check, Vortex automatically saves its clearance cookie & User-Agent once completed.",
+                                text = "Standard website connection — no Cloudflare verification detected on this page.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

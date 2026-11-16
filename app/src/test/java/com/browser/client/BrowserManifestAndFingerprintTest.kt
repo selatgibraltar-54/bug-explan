@@ -9,6 +9,9 @@ import android.webkit.WebResourceRequest
 import androidx.test.core.app.ApplicationProvider
 import com.browser.client.data.preferences.BrowserSettings
 import com.browser.client.engine.AdAndDataGuard
+import com.browser.client.engine.ClearanceCaptureResult
+import com.browser.client.engine.CloudflareClearanceEngine
+import com.browser.client.engine.DomainClearanceStatus
 import com.browser.client.engine.SessionFingerprintManager
 import com.browser.client.ui.BrowserViewModel
 import org.junit.Assert.assertEquals
@@ -118,6 +121,51 @@ class BrowserManifestAndFingerprintTest {
         assertTrue(viewModel.uiState.value.activeTab.isDesktopMode)
         viewModel.toggleDesktopMode()
         assertFalse(viewModel.uiState.value.activeTab.isDesktopMode)
+    }
+
+    @Test
+    fun `cloudflare challenge detection ignores regular websites and resets clearance status on non-CF navigation`() {
+        assertTrue(
+            CloudflareClearanceEngine.isCloudflareChallengeRequest(
+                "https://challenges.cloudflare.com/turnstile/v0/api.js"
+            )
+        )
+        assertTrue(
+            CloudflareClearanceEngine.isCloudflareChallengeRequest(
+                "https://protected.site/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"
+            )
+        )
+        assertFalse(
+            CloudflareClearanceEngine.isCloudflareChallengeRequest(
+                "https://en.wikipedia.org/wiki/Just_a_moment"
+            )
+        )
+        assertFalse(
+            CloudflareClearanceEngine.isCloudflareChallengeRequest(
+                "https://github.com/login"
+            )
+        )
+
+        val app = ApplicationProvider.getApplicationContext<Application>() as ClearPassApplication
+        val viewModel = BrowserViewModel(app, app.container)
+        val tabId = viewModel.uiState.value.activeTab.id
+
+        viewModel.onPageStarted(tabId, "https://cf-protected.example")
+        viewModel.onClearanceResult(
+            tabId,
+            ClearanceCaptureResult(
+                status = DomainClearanceStatus.VERIFIED_1X,
+                domain = "cf-protected.example",
+                newlyCaptured = false
+            )
+        )
+        assertEquals(DomainClearanceStatus.VERIFIED_1X, viewModel.uiState.value.activeTab.clearanceStatus)
+
+        // Navigating to a site without Cloudflare must clear the Cloudflare status immediately
+        viewModel.onPageStarted(tabId, "https://wikipedia.org")
+        assertEquals(DomainClearanceStatus.NONE, viewModel.uiState.value.activeTab.clearanceStatus)
+        viewModel.onPrepareStatus(tabId, DomainClearanceStatus.NONE)
+        assertEquals(DomainClearanceStatus.NONE, viewModel.uiState.value.activeTab.clearanceStatus)
     }
 
     private fun fakeWebRequest(url: String, isMainFrame: Boolean): WebResourceRequest {

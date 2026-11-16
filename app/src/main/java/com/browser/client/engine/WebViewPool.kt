@@ -72,6 +72,7 @@ class WebViewPool(
     private val webViews = mutableMapOf<String, WebView>()
     private val currentPageRootDomains = mutableMapOf<String, String>()
     private val desktopModes = mutableMapOf<String, Boolean>()
+    private val cloudflareNetworkDetectedTabs = mutableSetOf<String>()
     private val incognitoTabIds = mutableSetOf<String>()
     private val incognitoVisitedDomains = mutableSetOf<String>()
 
@@ -181,6 +182,9 @@ class WebViewPool(
                     request: WebResourceRequest?
                 ): WebResourceResponse? {
                     if (request == null) return null
+                    if (CloudflareClearanceEngine.isCloudflareChallengeRequest(request.url?.toString())) {
+                        cloudflareNetworkDetectedTabs.add(tabId)
+                    }
                     val rootDomain = currentPageRootDomains[tabId].orEmpty()
                     return AdAndDataGuard.inspectRequest(
                         request = request,
@@ -228,6 +232,10 @@ class WebViewPool(
                         }
                         val host = DomainUtils.extractHost(targetUrl)
                         val rootDomain = DomainUtils.extractRootDomain(targetUrl)
+                        val previousRoot = currentPageRootDomains[tabId]
+                        if (previousRoot != rootDomain) {
+                            cloudflareNetworkDetectedTabs.remove(tabId)
+                        }
                         currentPageRootDomains[tabId] = rootDomain
                         if (isIncognito) {
                             if (host.isNotBlank()) incognitoVisitedDomains.add(host)
@@ -251,6 +259,9 @@ class WebViewPool(
                     super.onPageStarted(view, url, favicon)
                     val host = DomainUtils.extractHost(url)
                     val rootDomain = DomainUtils.extractRootDomain(url)
+                    if (currentPageRootDomains[tabId] != rootDomain) {
+                        cloudflareNetworkDetectedTabs.remove(tabId)
+                    }
                     currentPageRootDomains[tabId] = rootDomain
                     val desktopNow = desktopModes[tabId] == true
                     if (isIncognito) {
@@ -290,13 +301,15 @@ class WebViewPool(
 
                     view.evaluateJavascript(CloudflareClearanceEngine.CF_DETECTION_JS) { raw ->
                         val isChallenge = raw?.contains("CHALLENGE", ignoreCase = true) == true
+                        val hasCfNetwork = tabId in cloudflareNetworkDetectedTabs
                         val result = clearanceEngine.inspectAndCaptureClearance(
                             webView = view,
                             url = url,
                             isChallengeDomDetected = isChallenge,
                             settings = settingsProvider(),
                             isDesktopMode = desktopNow,
-                            isIncognito = isIncognito
+                            isIncognito = isIncognito,
+                            hasCloudflareNetworkSignal = hasCfNetwork
                         )
                         callbacks.onClearanceResult(tabId, result)
                     }
@@ -332,7 +345,9 @@ class WebViewPool(
                     callbacks.onProgressChanged(tabId, newProgress)
                     if (newProgress >= 85) {
                         val currentUrl = view.url.orEmpty()
-                        if (currentUrl.startsWith("http")) {
+                        val shouldInspectDuringProgress = tabId in cloudflareNetworkDetectedTabs ||
+                            (!isIncognito && clearanceEngine.getCachedClearance(currentUrl) != null)
+                        if (currentUrl.startsWith("http") && shouldInspectDuringProgress) {
                             view.evaluateJavascript(CloudflareClearanceEngine.CF_DETECTION_JS) { raw ->
                                 val isChallenge = raw?.contains("CHALLENGE", ignoreCase = true) == true
                                 val result = clearanceEngine.inspectAndCaptureClearance(
@@ -341,7 +356,8 @@ class WebViewPool(
                                     isChallengeDomDetected = isChallenge,
                                     settings = settingsProvider(),
                                     isDesktopMode = desktopModes[tabId] == true,
-                                    isIncognito = isIncognito
+                                    isIncognito = isIncognito,
+                                    hasCloudflareNetworkSignal = tabId in cloudflareNetworkDetectedTabs
                                 )
                                 callbacks.onClearanceResult(tabId, result)
                             }
@@ -469,6 +485,7 @@ class WebViewPool(
         val wv = webViews[tabId] ?: return DomainClearanceStatus.NONE
         val host = DomainUtils.extractHost(url)
         val rootDomain = DomainUtils.extractRootDomain(url)
+        cloudflareNetworkDetectedTabs.remove(tabId)
         currentPageRootDomains[tabId] = rootDomain
         if (isIncognito) {
             incognitoTabIds.add(tabId)
@@ -550,6 +567,7 @@ class WebViewPool(
 
     fun removeWebView(tabId: String) {
         val wasIncognito = incognitoTabIds.remove(tabId)
+        cloudflareNetworkDetectedTabs.remove(tabId)
         currentPageRootDomains.remove(tabId)
         desktopModes.remove(tabId)
         webViews.remove(tabId)?.apply {

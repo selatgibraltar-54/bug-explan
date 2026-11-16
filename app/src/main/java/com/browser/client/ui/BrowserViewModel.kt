@@ -894,6 +894,7 @@ class BrowserViewModel(
     override fun onPageStarted(tabId: String, url: String) {
         val domain = DomainUtils.extractRootDomain(url)
         updateTab(tabId) { tab ->
+            val domainChanged = domain != tab.activeDomain
             tab.copy(
                 url = url,
                 isHome = false,
@@ -901,6 +902,7 @@ class BrowserViewModel(
                 progress = 15,
                 isReaderMode = if (tab.url != url) false else tab.isReaderMode,
                 readerArticle = if (tab.url != url) null else tab.readerArticle,
+                clearanceStatus = if (domainChanged) DomainClearanceStatus.NONE else tab.clearanceStatus,
                 activeDomain = domain,
                 offlineErrorUrl = null
             )
@@ -970,9 +972,7 @@ class BrowserViewModel(
     }
 
     override fun onPrepareStatus(tabId: String, status: DomainClearanceStatus) {
-        if (status != DomainClearanceStatus.NONE) {
-            updateTab(tabId) { it.copy(clearanceStatus = status) }
-        }
+        updateTab(tabId) { it.copy(clearanceStatus = status) }
     }
 
     override fun onOfflineError(tabId: String, url: String) {
