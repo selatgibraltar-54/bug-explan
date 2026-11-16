@@ -36,6 +36,7 @@ fun WebViewContainer(
             val webView = webViewPool.getOrCreateWebView(
                 tabId = tabId,
                 isIncognito = isIncognito,
+                uiContext = container.context,
                 settingsProvider = settingsProvider,
                 isDesktopProvider = { isDesktopMode },
                 callbacks = callbacks

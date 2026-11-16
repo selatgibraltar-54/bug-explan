@@ -5,6 +5,7 @@ import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.MutableContextWrapper
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
@@ -12,6 +13,7 @@ import android.os.Environment
 import android.os.Message
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -64,6 +66,7 @@ class WebViewPool(
     fun getOrCreateWebView(
         tabId: String,
         isIncognito: Boolean = false,
+        uiContext: Context? = null,
         settingsProvider: () -> BrowserSettings,
         isDesktopProvider: () -> Boolean,
         callbacks: WebTabCallbacks
@@ -72,11 +75,15 @@ class WebViewPool(
             incognitoTabIds.add(tabId)
         }
         webViews[tabId]?.let { existing ->
+            if (uiContext != null) {
+                (existing.context as? MutableContextWrapper)?.baseContext = uiContext
+            }
             applyRuntimeSettings(existing, settingsProvider(), isIncognito)
             return existing
         }
 
-        val webView = WebView(context).apply {
+        val wrappedContext = MutableContextWrapper(uiContext ?: context)
+        val webView = WebView(wrappedContext).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -231,6 +238,18 @@ class WebViewPool(
                     if (request.isForMainFrame && !networkMonitor.isOnlineNow()) {
                         callbacks.onOfflineError(tabId, request.url.toString())
                     }
+                }
+
+                override fun onRenderProcessGone(
+                    view: WebView,
+                    detail: RenderProcessGoneDetail
+                ): Boolean {
+                    val lastUrl = view.url
+                    removeWebView(tabId)
+                    if (!lastUrl.isNullOrBlank() && !networkMonitor.isOnlineNow()) {
+                        callbacks.onOfflineError(tabId, lastUrl)
+                    }
+                    return true
                 }
             }
 
@@ -408,6 +427,7 @@ class WebViewPool(
             if (wasIncognito) {
                 clearCache(true)
             }
+            (this.context as? MutableContextWrapper)?.baseContext = context.applicationContext
             removeAllViews()
             destroy()
         }
