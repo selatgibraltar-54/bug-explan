@@ -9,7 +9,7 @@ on:
 
 jobs:
   build_and_test:
-    name: Build & Test ClearPass Browser
+    name: Build & Test Vortex Browser
     runs-on: ubuntu-latest
 
     steps:
@@ -23,7 +23,10 @@ jobs:
           java-version: '21'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: true
 
       - name: Ensure debug.keystore is available
         run: |
@@ -45,7 +48,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ClearPassBrowser-debug-apk
+          name: Vortex-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
