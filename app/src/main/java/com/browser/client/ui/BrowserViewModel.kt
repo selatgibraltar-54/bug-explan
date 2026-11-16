@@ -1,6 +1,7 @@
 package com.browser.client.ui
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -12,6 +13,7 @@ import com.browser.client.AppContainer
 import com.browser.client.data.local.BookmarkEntity
 import com.browser.client.data.local.ClearanceEntity
 import com.browser.client.data.local.HistoryEntity
+import com.browser.client.data.local.SearchHistoryEntity
 import com.browser.client.data.preferences.BrowserSettings
 import com.browser.client.data.preferences.JsSecurityMode
 import com.browser.client.data.preferences.SearchEngine
@@ -22,7 +24,11 @@ import com.browser.client.engine.DomainClearanceStatus
 import com.browser.client.engine.DomainUtils
 import com.browser.client.engine.DownloadProgressSnapshot
 import com.browser.client.engine.DownloadTaskStatus
+import com.browser.client.engine.GooglePasswordManagerLaunchResult
 import com.browser.client.engine.NetworkStatus
+import com.browser.client.engine.PasskeyCreateResult
+import com.browser.client.engine.PasskeyGetResult
+import com.browser.client.engine.PasskeyManagerBridge
 import com.browser.client.engine.ReaderArticle
 import com.browser.client.engine.WebTabCallbacks
 import com.browser.client.engine.toSnapshot
@@ -38,6 +44,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.lang.ref.WeakReference
 import java.util.UUID
 
 enum class BrowserOverlay {
@@ -71,17 +78,30 @@ data class BrowserTabState(
     val offlineErrorUrl: String? = null
 )
 
+data class PasskeyPromptState(
+    val tabId: String,
+    val callId: String,
+    val mode: String,
+    val pageUrl: String,
+    val originHost: String,
+    val reason: String,
+    val isIncognito: Boolean,
+    val openedPasswordManagerAutomatically: Boolean = false
+)
+
 data class BrowserUiState(
     val tabs: List<BrowserTabState> = listOf(BrowserTabState()),
     val activeTabId: String = "",
     val addressInput: String = "",
     val isEditingAddress: Boolean = false,
     val activeOverlay: BrowserOverlay = BrowserOverlay.NONE,
+    val bookmarksHistoryInitialTab: Int = 0,
     val findInPageVisible: Boolean = false,
     val findInPageQuery: String = "",
     val readerFontScale: Float = 1.0f,
     val readerSepiaPaper: Boolean = false,
     val isDefaultBrowser: Boolean = false,
+    val passkeyPrompt: PasskeyPromptState? = null,
     val snackbarMessage: String? = null
 ) {
     val activeTab: BrowserTabState
@@ -121,6 +141,9 @@ class BrowserViewModel(
     val recentHistory: StateFlow<List<HistoryEntity>> = container.browserDataRepository.recentHistory
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val searchHistory: StateFlow<List<SearchHistoryEntity>> = container.browserDataRepository.searchHistory
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val downloadItems: StateFlow<List<DownloadProgressSnapshot>> = combine(
         container.browserDataRepository.allDownloads,
         container.downloadEngine.activeDownloads,
@@ -142,6 +165,7 @@ class BrowserViewModel(
 
     var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
     var onRequestFileChooser: ((WebChromeClient.FileChooserParams?) -> Unit)? = null
+    private var activityContextRef: WeakReference<Context>? = null
 
     init {
         viewModelScope.launch {
@@ -155,6 +179,10 @@ class BrowserViewModel(
                 }
             }
         }
+    }
+
+    fun attachActivityContext(context: Context) {
+        activityContextRef = WeakReference(context)
     }
 
     fun refreshDefaultBrowserStatus() {
@@ -178,8 +206,20 @@ class BrowserViewModel(
     }
 
     fun navigateFromOmnibox(rawInput: String) {
-        val resolved = DomainUtils.resolveInputToUrl(rawInput, settings.value.searchEngine)
+        val currentEngine = settings.value.searchEngine
+        val resolved = DomainUtils.resolveInputToUrl(rawInput, currentEngine)
         if (resolved.isBlank()) return
+        val searchQuery = DomainUtils.extractSearchQueryIfSearch(rawInput)
+        val isIncognito = _uiState.value.activeTab.isIncognito
+        if (!isIncognito && !searchQuery.isNullOrBlank()) {
+            viewModelScope.launch {
+                container.browserDataRepository.recordSearchQuery(
+                    query = searchQuery,
+                    searchEngine = currentEngine.label,
+                    searchUrl = resolved
+                )
+            }
+        }
         loadUrlInActiveTab(resolved)
         _uiState.update { it.copy(isEditingAddress = false) }
     }
@@ -562,13 +602,13 @@ class BrowserViewModel(
         val tab = _uiState.value.activeTab
         val nextDesktop = !tab.isDesktopMode
         updateTab(tab.id) { it.copy(isDesktopMode = nextDesktop) }
+        container.webViewPool.setDesktopMode(
+            tabId = tab.id,
+            enabled = nextDesktop,
+            settings = settings.value
+        )
         val wv = container.webViewPool.getExistingWebView(tab.id)
         if (!tab.isHome && wv != null && tab.url.isNotBlank()) {
-            val ua = container.fingerprintManager.resolveUserAgent(
-                stripWebViewToken = settings.value.stripWebViewToken,
-                isDesktopMode = nextDesktop
-            )
-            wv.settings.userAgentString = ua
             wv.reload()
         }
         showMessage(if (nextDesktop) "Desktop site enabled" else "Mobile site enabled")
@@ -589,12 +629,27 @@ class BrowserViewModel(
         }
     }
 
-    fun addCustomBookmark(title: String, url: String) {
+    fun addCustomBookmark(title: String, url: String, isPinned: Boolean = true) {
         val resolved = DomainUtils.resolveInputToUrl(url, settings.value.searchEngine)
         if (resolved.isBlank()) return
         viewModelScope.launch {
-            container.browserDataRepository.addBookmark(title, resolved, isPinned = true)
-            showMessage("Added speed dial shortcut")
+            container.browserDataRepository.addBookmark(title, resolved, isPinned = isPinned)
+            showMessage(if (isPinned) "Added speed dial shortcut" else "Bookmark saved")
+        }
+    }
+
+    fun updateBookmark(id: Long, title: String, url: String, isPinned: Boolean) {
+        val resolved = DomainUtils.resolveInputToUrl(url, settings.value.searchEngine)
+        if (resolved.isBlank()) return
+        viewModelScope.launch {
+            container.browserDataRepository.updateBookmark(id, title, resolved, isPinned)
+            showMessage("Bookmark updated")
+        }
+    }
+
+    fun toggleBookmarkPinned(id: Long) {
+        viewModelScope.launch {
+            container.browserDataRepository.toggleBookmarkPinned(id)
         }
     }
 
@@ -637,6 +692,35 @@ class BrowserViewModel(
     fun deleteHistoryItem(id: Long) {
         viewModelScope.launch {
             container.browserDataRepository.deleteHistoryItem(id)
+        }
+    }
+
+    fun runSearchFromHistory(entry: SearchHistoryEntity) {
+        val active = _uiState.value.activeTab
+        val currentEngine = settings.value.searchEngine
+        val targetUrl = DomainUtils.resolveInputToUrl(entry.query, currentEngine)
+        if (!active.isIncognito) {
+            viewModelScope.launch {
+                container.browserDataRepository.recordSearchQuery(
+                    query = entry.query,
+                    searchEngine = currentEngine.label,
+                    searchUrl = targetUrl
+                )
+            }
+        }
+        loadUrlInActiveTab(targetUrl)
+    }
+
+    fun deleteSearchHistoryItem(id: Long) {
+        viewModelScope.launch {
+            container.browserDataRepository.deleteSearchHistoryItem(id)
+        }
+    }
+
+    fun clearSearchHistory() {
+        viewModelScope.launch {
+            container.browserDataRepository.clearSearchHistory()
+            showMessage("Search history cleared")
         }
     }
 
@@ -687,7 +771,23 @@ class BrowserViewModel(
     }
 
     fun openOverlay(overlay: BrowserOverlay) {
-        _uiState.update { it.copy(activeOverlay = overlay, isEditingAddress = false) }
+        _uiState.update {
+            it.copy(
+                activeOverlay = overlay,
+                bookmarksHistoryInitialTab = if (overlay == BrowserOverlay.BOOKMARKS_HISTORY) 0 else it.bookmarksHistoryInitialTab,
+                isEditingAddress = false
+            )
+        }
+    }
+
+    fun openBookmarksHistory(initialTab: Int = 0) {
+        _uiState.update {
+            it.copy(
+                activeOverlay = BrowserOverlay.BOOKMARKS_HISTORY,
+                bookmarksHistoryInitialTab = initialTab.coerceIn(0, 2),
+                isEditingAddress = false
+            )
+        }
     }
 
     fun closeOverlay() {
@@ -761,10 +861,15 @@ class BrowserViewModel(
                 container.webViewPool.applyRuntimeSettings(
                     webView = wv,
                     settings = settings.value.copy(jsSecurityMode = mode),
-                    isIncognito = active.isIncognito
+                    isIncognito = active.isIncognito,
+                    isDesktopMode = active.isDesktopMode
                 )
             }
         }
+    }
+
+    fun setDefaultDesktopMode(enabled: Boolean) {
+        viewModelScope.launch { container.preferencesRepository.setDefaultDesktopMode(enabled) }
     }
 
     fun setShowImageSearchOnNewTab(enabled: Boolean) {
@@ -822,8 +927,16 @@ class BrowserViewModel(
         if (tab != null && !tab.isIncognito && tab.offlineErrorUrl == null) {
             val hasCf = tab.clearanceStatus == DomainClearanceStatus.VERIFIED_1X ||
                 tab.clearanceStatus == DomainClearanceStatus.RESTORED_FROM_VAULT
+            val detectedSearch = DomainUtils.extractSearchQueryFromUrl(url)
             viewModelScope.launch {
                 container.browserDataRepository.recordHistory(cleanTitle, url, hasCf)
+                if (detectedSearch != null) {
+                    container.browserDataRepository.recordSearchQuery(
+                        query = detectedSearch.first,
+                        searchEngine = detectedSearch.second,
+                        searchUrl = url
+                    )
+                }
             }
         }
     }
@@ -943,6 +1056,213 @@ class BrowserViewModel(
             if (isIncognito) "Downloading $fileName (Private session — not saved to history)"
             else "Downloading $fileName"
         )
+    }
+
+    override fun onPasskeyRequested(
+        tabId: String,
+        callId: String,
+        mode: String,
+        requestJson: String,
+        pageUrl: String,
+        isIncognito: Boolean
+    ) {
+        val originHost = DomainUtils.extractHost(pageUrl).ifBlank { "this site" }
+        if (isIncognito) {
+            _uiState.update {
+                it.copy(
+                    passkeyPrompt = PasskeyPromptState(
+                        tabId = tabId,
+                        callId = callId,
+                        mode = mode,
+                        pageUrl = pageUrl,
+                        originHost = originHost,
+                        reason = "Hardened Incognito paused automatic Google Password Manager launch so external apps aren't opened silently from a private tab.",
+                        isIncognito = true,
+                        openedPasswordManagerAutomatically = false
+                    )
+                )
+            }
+            return
+        }
+
+        if (mode == "uri" || requestJson.isBlank()) {
+            val result = openGooglePasswordManager(openWebFallbackInTab = true)
+            _uiState.update {
+                it.copy(
+                    passkeyPrompt = PasskeyPromptState(
+                        tabId = tabId,
+                        callId = callId,
+                        mode = mode,
+                        pageUrl = pageUrl,
+                        originHost = originHost,
+                        reason = if (result == GooglePasswordManagerLaunchResult.OPENED_NATIVE) {
+                            "$originHost requested passkey verification. Google Password Manager was opened."
+                        } else {
+                            "$originHost requested passkey verification. Opened Google Password Manager web portal."
+                        },
+                        isIncognito = false,
+                        openedPasswordManagerAutomatically = true
+                    )
+                )
+            }
+            return
+        }
+
+        val uiContext = activityContextRef?.get() ?: getApplication<Application>()
+        viewModelScope.launch {
+            if (mode == "create") {
+                when (val createResult = PasskeyManagerBridge.createPasskey(uiContext, requestJson)) {
+                    is PasskeyCreateResult.RegistrationJson -> {
+                        container.webViewPool.resolvePasskeyJsCall(
+                            tabId = tabId,
+                            callId = callId,
+                            responseJson = createResult.registrationResponseJson
+                        )
+                        showMessage("Passkey saved for $originHost")
+                    }
+                    PasskeyCreateResult.Canceled -> {
+                        container.webViewPool.rejectPasskeyJsCall(
+                            tabId = tabId,
+                            callId = callId,
+                            reason = "Passkey creation cancelled"
+                        )
+                    }
+                    is PasskeyCreateResult.FallbackRequired -> {
+                        container.webViewPool.rejectPasskeyJsCall(
+                            tabId = tabId,
+                            callId = callId,
+                            reason = createResult.reason
+                        )
+                        launchFallbackGooglePasswordManager(
+                            tabId = tabId,
+                            callId = callId,
+                            mode = mode,
+                            pageUrl = pageUrl,
+                            originHost = originHost,
+                            reason = createResult.reason
+                        )
+                    }
+                }
+            } else {
+                when (val getResult = PasskeyManagerBridge.getPasskeyOrPassword(uiContext, requestJson)) {
+                    is PasskeyGetResult.PublicKeyJson -> {
+                        container.webViewPool.resolvePasskeyJsCall(
+                            tabId = tabId,
+                            callId = callId,
+                            responseJson = getResult.authenticationResponseJson
+                        )
+                        showMessage("Passkey verified for $originHost")
+                    }
+                    is PasskeyGetResult.Password -> {
+                        container.webViewPool.rejectPasskeyJsCall(
+                            tabId = tabId,
+                            callId = callId,
+                            reason = "Password credential selected"
+                        )
+                        showMessage("Retrieved credential for ${getResult.id} from Google Password Manager")
+                    }
+                    PasskeyGetResult.Canceled -> {
+                        container.webViewPool.rejectPasskeyJsCall(
+                            tabId = tabId,
+                            callId = callId,
+                            reason = "Passkey verification cancelled"
+                        )
+                    }
+                    is PasskeyGetResult.FallbackRequired -> {
+                        container.webViewPool.rejectPasskeyJsCall(
+                            tabId = tabId,
+                            callId = callId,
+                            reason = getResult.reason
+                        )
+                        launchFallbackGooglePasswordManager(
+                            tabId = tabId,
+                            callId = callId,
+                            mode = mode,
+                            pageUrl = pageUrl,
+                            originHost = originHost,
+                            reason = getResult.reason
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun launchFallbackGooglePasswordManager(
+        tabId: String,
+        callId: String,
+        mode: String,
+        pageUrl: String,
+        originHost: String,
+        reason: String
+    ) {
+        val launchResult = openGooglePasswordManager(openWebFallbackInTab = false)
+        _uiState.update {
+            it.copy(
+                passkeyPrompt = PasskeyPromptState(
+                    tabId = tabId,
+                    callId = callId,
+                    mode = mode,
+                    pageUrl = pageUrl,
+                    originHost = originHost,
+                    reason = reason,
+                    isIncognito = false,
+                    openedPasswordManagerAutomatically = launchResult == GooglePasswordManagerLaunchResult.OPENED_NATIVE
+                )
+            )
+        }
+    }
+
+    fun openGooglePasswordManager(
+        openWebFallbackInTab: Boolean = true
+    ): GooglePasswordManagerLaunchResult {
+        val uiContext = activityContextRef?.get() ?: getApplication<Application>()
+        val result = PasskeyManagerBridge.openGooglePasswordManager(
+            context = uiContext,
+            onFallbackWebUrl = if (openWebFallbackInTab) {
+                { webUrl -> openNewTab(webUrl, isIncognito = false) }
+            } else {
+                null
+            }
+        )
+        when (result) {
+            GooglePasswordManagerLaunchResult.OPENED_NATIVE ->
+                showMessage("Opening Google Password Manager")
+            GooglePasswordManagerLaunchResult.OPENED_WEB_FALLBACK ->
+                showMessage("Opened passwords.google.com")
+            GooglePasswordManagerLaunchResult.FAILED ->
+                showMessage("Google Password Manager is unavailable on this device")
+        }
+        return result
+    }
+
+    fun confirmOpenGooglePasswordManagerFromPrompt(useWebPortal: Boolean = false) {
+        val prompt = _uiState.value.passkeyPrompt
+        if (prompt != null && prompt.callId.isNotBlank()) {
+            container.webViewPool.rejectPasskeyJsCall(
+                tabId = prompt.tabId,
+                callId = prompt.callId,
+                reason = "Continuing verification in Google Password Manager"
+            )
+        }
+        _uiState.update { it.copy(passkeyPrompt = null) }
+        if (useWebPortal) {
+            openNewTab(PasskeyManagerBridge.GOOGLE_PASSWORD_MANAGER_WEB_URL, isIncognito = false)
+        } else {
+            openGooglePasswordManager(openWebFallbackInTab = true)
+        }
+    }
+
+    fun dismissPasskeyPrompt() {
+        val prompt = _uiState.value.passkeyPrompt
+        if (prompt != null && prompt.callId.isNotBlank() && prompt.isIncognito) {
+            container.webViewPool.rejectPasskeyJsCall(
+                tabId = prompt.tabId,
+                callId = prompt.callId,
+                reason = "Passkey verification dismissed"
+            )
+        }
+        _uiState.update { it.copy(passkeyPrompt = null) }
     }
 
     private fun updateTab(tabId: String, transform: (BrowserTabState) -> BrowserTabState) {

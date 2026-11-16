@@ -26,9 +26,10 @@ import org.robolectric.annotation.Config
 class BrowserManifestAndFingerprintTest {
 
     @Test
-    fun `app name matches ClearPass Browser`() {
+    fun `app name matches Vortex and package name remains unchanged`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        assertEquals("ClearPass Browser", context.getString(R.string.app_name))
+        assertEquals("Vortex", context.getString(R.string.app_name))
+        assertEquals("com.browser.client", context.packageName)
     }
 
     @Test
@@ -101,6 +102,22 @@ class BrowserManifestAndFingerprintTest {
         viewModel.closeAllIncognitoTabs()
         assertEquals(1, viewModel.uiState.value.tabs.size)
         assertFalse(viewModel.uiState.value.activeTab.isIncognito)
+    }
+
+    @Test
+    fun `desktop user agent switches to Windows Chrome and viewModel toggles active tab desktop mode`() {
+        val app = ApplicationProvider.getApplicationContext<Application>() as ClearPassApplication
+        val manager = SessionFingerprintManager(app)
+        val desktopUa = manager.resolveUserAgent(stripWebViewToken = true, isDesktopMode = true)
+        assertTrue(desktopUa.contains("Windows NT 10.0; Win64; x64"))
+        assertFalse(desktopUa.contains("Mobile"))
+
+        val viewModel = BrowserViewModel(app, app.container)
+        assertFalse(viewModel.uiState.value.activeTab.isDesktopMode)
+        viewModel.toggleDesktopMode()
+        assertTrue(viewModel.uiState.value.activeTab.isDesktopMode)
+        viewModel.toggleDesktopMode()
+        assertFalse(viewModel.uiState.value.activeTab.isDesktopMode)
     }
 
     private fun fakeWebRequest(url: String, isMainFrame: Boolean): WebResourceRequest {

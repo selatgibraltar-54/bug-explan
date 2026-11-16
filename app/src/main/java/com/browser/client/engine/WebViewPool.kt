@@ -8,9 +8,12 @@ import android.content.MutableContextWrapper
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.Message
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
@@ -25,6 +28,7 @@ import android.webkit.WebViewClient
 import android.webkit.WebViewDatabase
 import com.browser.client.data.preferences.BrowserSettings
 import com.browser.client.data.preferences.JsSecurityMode
+import org.json.JSONObject
 
 interface WebTabCallbacks {
     fun onPageStarted(tabId: String, url: String)
@@ -48,6 +52,14 @@ interface WebTabCallbacks {
         contentLength: Long,
         isIncognito: Boolean
     )
+    fun onPasskeyRequested(
+        tabId: String,
+        callId: String,
+        mode: String,
+        requestJson: String,
+        pageUrl: String,
+        isIncognito: Boolean
+    )
 }
 
 class WebViewPool(
@@ -56,8 +68,10 @@ class WebViewPool(
     private val fingerprintManager: SessionFingerprintManager,
     private val networkMonitor: NetworkMonitor
 ) {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val webViews = mutableMapOf<String, WebView>()
     private val currentPageRootDomains = mutableMapOf<String, String>()
+    private val desktopModes = mutableMapOf<String, Boolean>()
     private val incognitoTabIds = mutableSetOf<String>()
     private val incognitoVisitedDomains = mutableSetOf<String>()
 
@@ -73,11 +87,13 @@ class WebViewPool(
         if (isIncognito) {
             incognitoTabIds.add(tabId)
         }
+        val initialDesktop = isDesktopProvider()
+        desktopModes[tabId] = initialDesktop
         webViews[tabId]?.let { existing ->
             if (uiContext != null) {
                 (existing.context as? MutableContextWrapper)?.baseContext = uiContext
             }
-            applyRuntimeSettings(existing, settingsProvider(), isIncognito)
+            applyRuntimeSettings(existing, settingsProvider(), isIncognito, initialDesktop)
             return existing
         }
 
@@ -110,10 +126,10 @@ class WebViewPool(
                 mediaPlaybackRequiresUserGesture = isIncognito
                 userAgentString = fingerprintManager.resolveUserAgent(
                     stripWebViewToken = settingsProvider().stripWebViewToken,
-                    isDesktopMode = isDesktopProvider()
+                    isDesktopMode = desktopModes[tabId] == true
                 )
             }
-            applyRuntimeSettings(this, settingsProvider(), isIncognito)
+            applyRuntimeSettings(this, settingsProvider(), isIncognito, desktopModes[tabId] == true)
 
             val cm = CookieManager.getInstance()
             cm.setAcceptCookie(true)
@@ -130,6 +146,34 @@ class WebViewPool(
                     callbacks = callbacks
                 )
             }
+
+            addJavascriptInterface(
+                object {
+                    @JavascriptInterface
+                    fun onPasskeyRequested(
+                        callId: String?,
+                        mode: String?,
+                        requestJson: String?,
+                        pageUrl: String?
+                    ) {
+                        val safeCallId = callId.orEmpty()
+                        val safeMode = mode.orEmpty().ifBlank { "get" }
+                        val safeJson = requestJson.orEmpty()
+                        val safePageUrl = pageUrl.orEmpty()
+                        mainHandler.post {
+                            callbacks.onPasskeyRequested(
+                                tabId = tabId,
+                                callId = safeCallId,
+                                mode = safeMode,
+                                requestJson = safeJson,
+                                pageUrl = safePageUrl,
+                                isIncognito = isIncognito
+                            )
+                        }
+                    }
+                },
+                "ClearPassPasskeyBridge"
+            )
 
             webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(
@@ -151,6 +195,17 @@ class WebViewPool(
                     request: WebResourceRequest
                 ): Boolean {
                     val targetUrl = request.url.toString()
+                    if (PasskeyManagerBridge.isPasskeyUri(targetUrl)) {
+                        callbacks.onPasskeyRequested(
+                            tabId = tabId,
+                            callId = "",
+                            mode = "uri",
+                            requestJson = "",
+                            pageUrl = view.url ?: targetUrl,
+                            isIncognito = isIncognito
+                        )
+                        return true
+                    }
                     val scheme = request.url.scheme?.lowercase().orEmpty()
                     if (scheme != "http" && scheme != "https" && scheme != "about") {
                         // Hardened Incognito blocks silent external app scheme probes/leaks
@@ -178,12 +233,13 @@ class WebViewPool(
                             if (host.isNotBlank()) incognitoVisitedDomains.add(host)
                             if (rootDomain.isNotBlank()) incognitoVisitedDomains.add(rootDomain)
                         }
-                        applyRuntimeSettings(view, settingsProvider(), isIncognito)
+                        val desktopNow = desktopModes[tabId] == true
+                        applyRuntimeSettings(view, settingsProvider(), isIncognito, desktopNow)
                         val prepStatus = clearanceEngine.prepareForUrl(
                             webView = view,
                             url = targetUrl,
                             settings = settingsProvider(),
-                            tabDesktopMode = isDesktopProvider(),
+                            tabDesktopMode = desktopNow,
                             isIncognito = isIncognito
                         )
                         callbacks.onPrepareStatus(tabId, prepStatus)
@@ -196,19 +252,24 @@ class WebViewPool(
                     val host = DomainUtils.extractHost(url)
                     val rootDomain = DomainUtils.extractRootDomain(url)
                     currentPageRootDomains[tabId] = rootDomain
+                    val desktopNow = desktopModes[tabId] == true
                     if (isIncognito) {
                         if (host.isNotBlank()) incognitoVisitedDomains.add(host)
                         if (rootDomain.isNotBlank()) incognitoVisitedDomains.add(rootDomain)
                         view.evaluateJavascript(AdAndDataGuard.INCOGNITO_HARDENING_JS, null)
                     }
-                    applyRuntimeSettings(view, settingsProvider(), isIncognito)
+                    if (desktopNow) {
+                        view.evaluateJavascript(DESKTOP_VIEWPORT_JS, null)
+                    }
+                    view.evaluateJavascript(PasskeyManagerBridge.PASSKEY_INTERCEPTOR_JS, null)
+                    applyRuntimeSettings(view, settingsProvider(), isIncognito, desktopNow)
                     callbacks.onPageStarted(tabId, url)
                     callbacks.onNavigationStateChanged(tabId, view.canGoBack(), view.canGoForward())
                     val prepStatus = clearanceEngine.prepareForUrl(
                         webView = view,
                         url = url,
                         settings = settingsProvider(),
-                        tabDesktopMode = isDesktopProvider(),
+                        tabDesktopMode = desktopNow,
                         isIncognito = isIncognito
                     )
                     callbacks.onPrepareStatus(tabId, prepStatus)
@@ -216,9 +277,14 @@ class WebViewPool(
 
                 override fun onPageFinished(view: WebView, url: String) {
                     super.onPageFinished(view, url)
+                    val desktopNow = desktopModes[tabId] == true
                     if (isIncognito) {
                         view.evaluateJavascript(AdAndDataGuard.INCOGNITO_HARDENING_JS, null)
                     }
+                    if (desktopNow) {
+                        view.evaluateJavascript(DESKTOP_VIEWPORT_JS, null)
+                    }
+                    view.evaluateJavascript(PasskeyManagerBridge.PASSKEY_INTERCEPTOR_JS, null)
                     callbacks.onPageFinished(tabId, url, view.title)
                     callbacks.onNavigationStateChanged(tabId, view.canGoBack(), view.canGoForward())
 
@@ -229,7 +295,7 @@ class WebViewPool(
                             url = url,
                             isChallengeDomDetected = isChallenge,
                             settings = settingsProvider(),
-                            isDesktopMode = isDesktopProvider(),
+                            isDesktopMode = desktopNow,
                             isIncognito = isIncognito
                         )
                         callbacks.onClearanceResult(tabId, result)
@@ -274,7 +340,7 @@ class WebViewPool(
                                     url = currentUrl,
                                     isChallengeDomDetected = isChallenge,
                                     settings = settingsProvider(),
-                                    isDesktopMode = isDesktopProvider(),
+                                    isDesktopMode = desktopModes[tabId] == true,
                                     isIncognito = isIncognito
                                 )
                                 callbacks.onClearanceResult(tabId, result)
@@ -355,6 +421,43 @@ class WebViewPool(
         }
     }
 
+    fun setDesktopMode(
+        tabId: String,
+        enabled: Boolean,
+        settings: BrowserSettings
+    ) {
+        desktopModes[tabId] = enabled
+        val wv = webViews[tabId] ?: return
+        val isIncognito = tabId in incognitoTabIds
+        applyRuntimeSettings(wv, settings, isIncognito, enabled)
+    }
+
+    fun resolvePasskeyJsCall(tabId: String, callId: String, responseJson: String) {
+        if (callId.isBlank()) return
+        val wv = webViews[tabId] ?: return
+        val quotedCallId = JSONObject.quote(callId)
+        val quotedJson = JSONObject.quote(responseJson)
+        mainHandler.post {
+            wv.evaluateJavascript(
+                "window.__clearpassResolvePasskey && window.__clearpassResolvePasskey($quotedCallId, $quotedJson);",
+                null
+            )
+        }
+    }
+
+    fun rejectPasskeyJsCall(tabId: String, callId: String, reason: String) {
+        if (callId.isBlank()) return
+        val wv = webViews[tabId] ?: return
+        val quotedCallId = JSONObject.quote(callId)
+        val quotedReason = JSONObject.quote(reason)
+        mainHandler.post {
+            wv.evaluateJavascript(
+                "window.__clearpassRejectPasskey && window.__clearpassRejectPasskey($quotedCallId, $quotedReason);",
+                null
+            )
+        }
+    }
+
     fun loadUrl(
         tabId: String,
         url: String,
@@ -362,6 +465,7 @@ class WebViewPool(
         isDesktopMode: Boolean,
         isIncognito: Boolean = false
     ): DomainClearanceStatus {
+        desktopModes[tabId] = isDesktopMode
         val wv = webViews[tabId] ?: return DomainClearanceStatus.NONE
         val host = DomainUtils.extractHost(url)
         val rootDomain = DomainUtils.extractRootDomain(url)
@@ -371,7 +475,7 @@ class WebViewPool(
             if (host.isNotBlank()) incognitoVisitedDomains.add(host)
             if (rootDomain.isNotBlank()) incognitoVisitedDomains.add(rootDomain)
         }
-        applyRuntimeSettings(wv, settings, isIncognito)
+        applyRuntimeSettings(wv, settings, isIncognito, isDesktopMode)
         val status = clearanceEngine.prepareForUrl(wv, url, settings, isDesktopMode, isIncognito)
         val extraHeaders = buildMap {
             if (settings.dataSaverEnabled) put("Save-Data", "on")
@@ -391,11 +495,18 @@ class WebViewPool(
     fun applyRuntimeSettings(
         webView: WebView,
         settings: BrowserSettings,
-        isIncognito: Boolean = false
+        isIncognito: Boolean = false,
+        isDesktopMode: Boolean = false
     ) {
         val cm = CookieManager.getInstance()
         cm.setAcceptThirdPartyCookies(webView, !isIncognito)
         webView.settings.apply {
+            useWideViewPort = true
+            loadWithOverviewMode = true
+            userAgentString = fingerprintManager.resolveUserAgent(
+                stripWebViewToken = settings.stripWebViewToken,
+                isDesktopMode = isDesktopMode
+            )
             if (isIncognito) {
                 javaScriptEnabled = true
                 javaScriptCanOpenWindowsAutomatically = false
@@ -440,6 +551,7 @@ class WebViewPool(
     fun removeWebView(tabId: String) {
         val wasIncognito = incognitoTabIds.remove(tabId)
         currentPageRootDomains.remove(tabId)
+        desktopModes.remove(tabId)
         webViews.remove(tabId)?.apply {
             stopLoading()
             clearHistory()
@@ -520,5 +632,26 @@ class WebViewPool(
             contentLength = contentLength,
             isIncognito = isIncognito
         )
+    }
+
+    companion object {
+        const val DESKTOP_VIEWPORT_JS = """
+            (function() {
+                try {
+                    var target = 'width=1280, initial-scale=0.35, minimum-scale=0.2, maximum-scale=5.0, user-scalable=yes';
+                    var vp = document.querySelector('meta[name="viewport"]');
+                    if (vp) {
+                        if (vp.getAttribute('content') !== target) {
+                            vp.setAttribute('content', target);
+                        }
+                    } else if (document.head) {
+                        var meta = document.createElement('meta');
+                        meta.name = 'viewport';
+                        meta.content = target;
+                        document.head.appendChild(meta);
+                    }
+                } catch (e) {}
+            })();
+        """
     }
 }

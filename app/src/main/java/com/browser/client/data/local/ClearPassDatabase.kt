@@ -12,9 +12,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ClearanceEntity::class,
         BookmarkEntity::class,
         HistoryEntity::class,
-        DownloadEntity::class
+        DownloadEntity::class,
+        SearchHistoryEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class ClearPassDatabase : RoomDatabase() {
@@ -22,6 +23,7 @@ abstract class ClearPassDatabase : RoomDatabase() {
     abstract fun bookmarkDao(): BookmarkDao
     abstract fun historyDao(): HistoryDao
     abstract fun downloadDao(): DownloadDao
+    abstract fun searchHistoryDao(): SearchHistoryDao
 
     companion object {
         @Volatile
@@ -55,6 +57,22 @@ abstract class ClearPassDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `search_history` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `query` TEXT NOT NULL,
+                        `searchEngine` TEXT NOT NULL,
+                        `searchUrl` TEXT NOT NULL,
+                        `searchedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): ClearPassDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -62,7 +80,7 @@ abstract class ClearPassDatabase : RoomDatabase() {
                     ClearPassDatabase::class.java,
                     "clearpass_browser.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { INSTANCE = it }
             }

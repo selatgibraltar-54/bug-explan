@@ -52,7 +52,8 @@ class BrowserDownloadEngineTest {
         repository = BrowserDataRepository(
             bookmarkDao = db.bookmarkDao(),
             historyDao = db.historyDao(),
-            downloadDao = db.downloadDao()
+            downloadDao = db.downloadDao(),
+            searchHistoryDao = db.searchHistoryDao()
         )
         engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         engine = BrowserDownloadEngine(

@@ -44,9 +44,11 @@ import androidx.compose.material.icons.rounded.FindInPage
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.ImageSearch
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.ManageSearch
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PrivacyTip
@@ -95,6 +97,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.browser.client.R
+import com.browser.client.data.local.SearchHistoryEntity
 import com.browser.client.engine.DomainClearanceStatus
 import com.browser.client.engine.DomainUtils
 import com.browser.client.engine.NetworkStatus
@@ -131,9 +134,14 @@ fun OmniboxBar(
     onShareUrl: () -> Unit,
     onOpenVault: () -> Unit,
     onOpenBookmarksHistory: () -> Unit,
+    onOpenSearchHistory: () -> Unit = {},
     onOpenDownloads: () -> Unit,
+    onOpenPasswordManager: () -> Unit,
     onOpenCustomizeStarter: () -> Unit,
     onOpenSettings: () -> Unit,
+    searchHistory: List<SearchHistoryEntity> = emptyList(),
+    onRunSearchQuery: (SearchHistoryEntity) -> Unit = {},
+    onDeleteSearchHistoryItem: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val focusManager = LocalFocusManager.current
@@ -565,22 +573,6 @@ fun OmniboxBar(
                                 }
                             )
                             DropdownMenuItem(
-                                text = {
-                                    Text(if (tab.isDesktopMode) "Desktop Site (On)" else "Desktop Site")
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Rounded.DesktopWindows,
-                                        contentDescription = null,
-                                        tint = if (tab.isDesktopMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                    )
-                                },
-                                onClick = {
-                                    menuExpanded = false
-                                    onToggleDesktopMode()
-                                }
-                            )
-                            DropdownMenuItem(
                                 text = { Text("Find in Page") },
                                 leadingIcon = { Icon(Icons.Rounded.FindInPage, contentDescription = null) },
                                 onClick = {
@@ -597,6 +589,23 @@ fun OmniboxBar(
                                 }
                             )
                         }
+                        DropdownMenuItem(
+                            text = {
+                                Text(if (tab.isDesktopMode) "Desktop Mode (On)" else "Desktop Mode")
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Rounded.DesktopWindows,
+                                    contentDescription = null,
+                                    tint = if (tab.isDesktopMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onToggleDesktopMode()
+                            },
+                            modifier = Modifier.testTag("menu_desktop_mode_item")
+                        )
                         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                         DropdownMenuItem(
                             text = { Text("Customize Starter Page") },
@@ -637,6 +646,20 @@ fun OmniboxBar(
                         DropdownMenuItem(
                             text = {
                                 Text(
+                                    if (searchHistory.isNotEmpty()) "Search History (${searchHistory.size})"
+                                    else "Search History"
+                                )
+                            },
+                            leadingIcon = { Icon(Icons.Rounded.ManageSearch, contentDescription = null) },
+                            onClick = {
+                                menuExpanded = false
+                                onOpenSearchHistory()
+                            },
+                            modifier = Modifier.testTag("menu_search_history_item")
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(
                                     if (activeDownloadCount > 0) "Downloads ($activeDownloadCount active)"
                                     else "Downloads"
                                 )
@@ -648,6 +671,21 @@ fun OmniboxBar(
                             }
                         )
                         DropdownMenuItem(
+                            text = { Text("Google Password Manager") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Rounded.Key,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onOpenPasswordManager()
+                            },
+                            modifier = Modifier.testTag("menu_password_manager_item")
+                        )
+                        DropdownMenuItem(
                             text = { Text("Settings") },
                             leadingIcon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
                             onClick = {
@@ -655,6 +693,106 @@ fun OmniboxBar(
                                 onOpenSettings()
                             }
                         )
+                    }
+                }
+            }
+
+            // Recent Searches Suggestions (while typing in non-incognito omnibox)
+            val matchingSearches = remember(searchHistory, addressInput, isEditingAddress, tab.isIncognito) {
+                if (!isEditingAddress || tab.isIncognito) {
+                    emptyList()
+                } else {
+                    val trimmed = addressInput.trim()
+                    val filtered = if (trimmed.isEmpty()) {
+                        searchHistory
+                    } else {
+                        searchHistory.filter { it.query.contains(trimmed, ignoreCase = true) }
+                    }
+                    filtered.take(5)
+                }
+            }
+            AnimatedVisibility(
+                visible = matchingSearches.isNotEmpty(),
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .testTag("omnibox_recent_searches_panel"),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "RECENT SEARCHES",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "View all",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable {
+                                    focusManager.clearFocus()
+                                    onOpenSearchHistory()
+                                }
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    matchingSearches.forEach { entry ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    focusManager.clearFocus()
+                                    onRunSearchQuery(entry)
+                                }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Search,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = entry.query,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = DomainUtils.formatTimestamp(entry.searchedAt),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            IconButton(
+                                onClick = { onDeleteSearchHistoryItem(entry.id) },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "Remove recent search",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -785,6 +923,57 @@ fun OmniboxBar(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+            }
+
+            // Desktop Mode Active Strip
+            AnimatedVisibility(
+                visible = networkStatus.isConnected && tab.isDesktopMode && !tab.isHome && tab.offlineErrorUrl == null,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .padding(horizontal = 14.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.DesktopWindows,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = "Desktop Mode • 1280px viewport & Desktop Chrome UA",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(onClick = onToggleDesktopMode)
+                            .testTag("omnibox_desktop_mode_exit")
+                    ) {
+                        Text(
+                            text = "Mobile",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
                 }
             }
 

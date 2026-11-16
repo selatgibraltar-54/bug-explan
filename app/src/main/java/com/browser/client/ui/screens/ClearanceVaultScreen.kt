@@ -165,7 +165,7 @@ fun ClearanceVaultScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = "Visit any Cloudflare-protected site once. After you pass its check, ClearPass stores the cf_clearance cookie and locked User-Agent here so you won't have to verify again.",
+                            text = "Visit any Cloudflare-protected site once. After you pass its check, Vortex stores the cf_clearance cookie and locked User-Agent here so you won't have to verify again.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center

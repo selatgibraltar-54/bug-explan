@@ -424,7 +424,7 @@ fun StartPage(
                             }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "ClearPass Browser",
+                                    text = "Vortex",
                                     style = MaterialTheme.typography.headlineSmall,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )

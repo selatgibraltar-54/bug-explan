@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">ClearPass Browser</string>
+    <string name="app_name">Vortex</string>
     <string name="tagline">One-time verification. Persistent clearance.</string>
     <string name="search_or_url_placeholder">Search or enter website address</string>
     <string name="clearance_vault_title">Clearance Vault</string>

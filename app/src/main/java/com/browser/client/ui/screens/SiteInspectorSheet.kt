@@ -17,6 +17,7 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.DesktopWindows
 import androidx.compose.material.icons.rounded.HourglassTop
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Security
@@ -51,6 +52,7 @@ fun SiteInspectorSheet(
     clearanceEntity: ClearanceEntity?,
     onDismiss: () -> Unit,
     onToggleDesktopMode: () -> Unit,
+    onOpenPasswordManager: () -> Unit,
     onRevokeAndReload: (String) -> Unit,
     onShredIncognito: () -> Unit,
     onOpenVault: () -> Unit
@@ -218,7 +220,7 @@ fun SiteInspectorSheet(
                             )
                         } else {
                             Text(
-                                text = "If this site runs a Cloudflare Turnstile or 'Just a moment' check, ClearPass automatically saves its clearance cookie & User-Agent once completed.",
+                                text = "If this site runs a Cloudflare Turnstile or 'Just a moment' check, Vortex automatically saves its clearance cookie & User-Agent once completed.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -263,6 +265,44 @@ fun SiteInspectorSheet(
                             onDismiss()
                         }
                     )
+                }
+            }
+
+            // Google Password Manager / Passkeys Row
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                onClick = {
+                    onDismiss()
+                    onOpenPasswordManager()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("inspector_password_manager_row")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Key,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Google Password Manager",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = "Manage passkeys & saved credentials",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 

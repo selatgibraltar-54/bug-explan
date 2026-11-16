@@ -19,7 +19,8 @@ class AppContainer(application: Application) {
     val browserDataRepository = BrowserDataRepository(
         bookmarkDao = database.bookmarkDao(),
         historyDao = database.historyDao(),
-        downloadDao = database.downloadDao()
+        downloadDao = database.downloadDao(),
+        searchHistoryDao = database.searchHistoryDao()
     )
     val preferencesRepository = BrowserPreferencesRepository(application)
     val fingerprintManager = SessionFingerprintManager(application)

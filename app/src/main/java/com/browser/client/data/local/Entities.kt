@@ -53,3 +53,12 @@ data class DownloadEntity(
     val status: String = "COMPLETED",
     val errorMessage: String = ""
 )
+
+@Entity(tableName = "search_history")
+data class SearchHistoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val query: String,
+    val searchEngine: String,
+    val searchUrl: String,
+    val searchedAt: Long = System.currentTimeMillis()
+)

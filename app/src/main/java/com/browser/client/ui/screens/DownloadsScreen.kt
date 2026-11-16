@@ -180,7 +180,7 @@ fun DownloadsScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = "Files downloaded with ClearPass Download Engine appear here with live progress and pause/resume controls.",
+                            text = "Files downloaded with Vortex Download Engine appear here with live progress and pause/resume controls.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center

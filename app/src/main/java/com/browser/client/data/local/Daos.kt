@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -32,11 +33,20 @@ interface ClearanceDao {
 
 @Dao
 interface BookmarkDao {
-    @Query("SELECT * FROM bookmarks ORDER BY isPinned DESC, createdAt ASC")
+    @Query("SELECT * FROM bookmarks ORDER BY isPinned DESC, createdAt DESC")
     fun observeAllBookmarks(): Flow<List<BookmarkEntity>>
 
     @Query("SELECT * FROM bookmarks WHERE isPinned = 1 ORDER BY createdAt ASC")
     fun observePinnedBookmarks(): Flow<List<BookmarkEntity>>
+
+    @Query("SELECT * FROM bookmarks ORDER BY isPinned DESC, createdAt DESC")
+    suspend fun getAllOnce(): List<BookmarkEntity>
+
+    @Query("SELECT * FROM bookmarks WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): BookmarkEntity?
+
+    @Query("SELECT * FROM bookmarks WHERE url = :url LIMIT 1")
+    suspend fun getByUrl(url: String): BookmarkEntity?
 
     @Query("SELECT COUNT(*) FROM bookmarks")
     suspend fun countBookmarks(): Int
@@ -46,6 +56,9 @@ interface BookmarkDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(bookmark: BookmarkEntity)
+
+    @Update
+    suspend fun update(bookmark: BookmarkEntity)
 
     @Query("DELETE FROM bookmarks WHERE url = :url")
     suspend fun deleteByUrl(url: String)
@@ -111,5 +124,29 @@ interface DownloadDao {
     suspend fun deleteById(id: Long)
 
     @Query("DELETE FROM downloads")
+    suspend fun clearAll()
+}
+
+@Dao
+interface SearchHistoryDao {
+    @Query("SELECT * FROM search_history ORDER BY searchedAt DESC, id DESC LIMIT 200")
+    fun observeSearchHistory(): Flow<List<SearchHistoryEntity>>
+
+    @Query("SELECT * FROM search_history ORDER BY searchedAt DESC, id DESC")
+    suspend fun getAllOnce(): List<SearchHistoryEntity>
+
+    @Query("SELECT * FROM search_history WHERE LOWER(query) = LOWER(:query) LIMIT 1")
+    suspend fun findByNormalizedQuery(query: String): SearchHistoryEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entry: SearchHistoryEntity): Long
+
+    @Update
+    suspend fun update(entry: SearchHistoryEntity)
+
+    @Query("DELETE FROM search_history WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM search_history")
     suspend fun clearAll()
 }

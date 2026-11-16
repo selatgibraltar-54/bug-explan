@@ -70,22 +70,14 @@ object DomainUtils {
         val trimmed = input.trim()
         if (trimmed.isEmpty()) return ""
 
-        if (trimmed.startsWith("http://", ignoreCase = true) ||
-            trimmed.startsWith("https://", ignoreCase = true) ||
-            trimmed.startsWith("about:", ignoreCase = true)
-        ) {
-            return trimmed
-        }
-
-        val hasSpace = trimmed.contains(" ")
-        val hostCandidate = trimmed.substringBefore("/").substringBefore(":")
-        val looksLikeDomain = !hasSpace && (
-            (trimmed.contains(".") && !trimmed.startsWith(".") && !trimmed.endsWith(".")) ||
-                hostCandidate.equals("localhost", ignoreCase = true) ||
-                isIpAddress(hostCandidate)
-            )
-
-        if (looksLikeDomain) {
+        if (looksLikeDirectUrlOrDomain(trimmed)) {
+            if (trimmed.startsWith("http://", ignoreCase = true) ||
+                trimmed.startsWith("https://", ignoreCase = true) ||
+                trimmed.startsWith("about:", ignoreCase = true)
+            ) {
+                return trimmed
+            }
+            val hostCandidate = trimmed.substringBefore("/").substringBefore(":")
             val scheme = if (hostCandidate.equals("localhost", ignoreCase = true) ||
                 isIpAddress(hostCandidate)
             ) {
@@ -98,6 +90,59 @@ object DomainUtils {
 
         val encoded = URLEncoder.encode(trimmed, "UTF-8")
         return searchEngine.searchUrlTemplate.format(encoded)
+    }
+
+    fun extractSearchQueryIfSearch(input: String): String? {
+        val trimmed = input.trim()
+        if (trimmed.isEmpty()) return null
+        return if (looksLikeDirectUrlOrDomain(trimmed)) null else trimmed
+    }
+
+    fun extractSearchQueryFromUrl(url: String?): Pair<String, String>? {
+        if (url.isNullOrBlank()) return null
+        return try {
+            val uri = URI(url)
+            val host = uri.host?.lowercase(Locale.ROOT)?.removePrefix("www.") ?: return null
+            val path = uri.path.orEmpty().lowercase(Locale.ROOT)
+            val engineLabel = when {
+                host.endsWith("google.com") && path.startsWith("/search") -> SearchEngine.GOOGLE.label
+                host.endsWith("bing.com") && path.startsWith("/search") -> SearchEngine.BING.label
+                host == "search.brave.com" && path.startsWith("/search") -> SearchEngine.BRAVE.label
+                host.endsWith("duckduckgo.com") -> "DuckDuckGo"
+                else -> return null
+            }
+            val rawQuery = uri.rawQuery ?: return null
+            for (pair in rawQuery.split("&")) {
+                val eqIdx = pair.indexOf('=')
+                if (eqIdx <= 0) continue
+                val key = pair.substring(0, eqIdx)
+                if (key == "q" || key == "p") {
+                    val decoded = java.net.URLDecoder.decode(pair.substring(eqIdx + 1), "UTF-8").trim()
+                    if (decoded.isNotEmpty()) {
+                        return decoded to engineLabel
+                    }
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun looksLikeDirectUrlOrDomain(trimmed: String): Boolean {
+        if (trimmed.startsWith("http://", ignoreCase = true) ||
+            trimmed.startsWith("https://", ignoreCase = true) ||
+            trimmed.startsWith("about:", ignoreCase = true)
+        ) {
+            return true
+        }
+        val hasSpace = trimmed.contains(" ")
+        val hostCandidate = trimmed.substringBefore("/").substringBefore(":")
+        return !hasSpace && (
+            (trimmed.contains(".") && !trimmed.startsWith(".") && !trimmed.endsWith(".")) ||
+                hostCandidate.equals("localhost", ignoreCase = true) ||
+                isIpAddress(hostCandidate)
+            )
     }
 
     fun maskTokenPreview(token: String): String {

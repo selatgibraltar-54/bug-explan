@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DataSaverOn
+import androidx.compose.material.icons.rounded.DesktopWindows
 import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Speed
@@ -64,12 +65,14 @@ fun SettingsScreen(
     onSetThemeMode: (ThemeMode) -> Unit,
     onSetAdBlocker: (Boolean) -> Unit,
     onSetDataSaver: (Boolean) -> Unit,
+    onSetDefaultDesktopMode: (Boolean) -> Unit,
     onSetJsSecurityMode: (JsSecurityMode) -> Unit,
     onSetAutoFlush: (Boolean) -> Unit,
     onSetAutoRehydrate: (Boolean) -> Unit,
     onSetStripWebViewToken: (Boolean) -> Unit,
     onSetPerDomainUaLock: (Boolean) -> Unit,
     onClearHistory: () -> Unit,
+    onClearSearchHistory: () -> Unit = {},
     onClearAllClearances: () -> Unit
 ) {
     BackHandler(onBack = onBack)
@@ -147,9 +150,9 @@ fun SettingsScreen(
                             )
                             Text(
                                 text = if (isDefaultBrowser) {
-                                    "All HTTP/HTTPS links from other apps open in ClearPass with your saved 1x clearances."
+                                    "All HTTP/HTTPS links from other apps open in Vortex with your saved 1x clearances."
                                 } else {
-                                    "Make ClearPass (com.browser.client) your Android default browser so external links never re-verify."
+                                    "Make Vortex (com.browser.client) your Android default browser so external links never re-verify."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -248,6 +251,38 @@ fun SettingsScreen(
                 }
             }
 
+            // Desktop Mode by Default
+            SettingsSection(title = "DESKTOP MODE") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.DesktopWindows,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(text = "Always Request Desktop Site", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            text = "Open new tabs with Desktop Chrome User-Agent & 1280px desktop viewport.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = settings.defaultDesktopMode,
+                        onCheckedChange = onSetDefaultDesktopMode,
+                        modifier = Modifier.testTag("default_desktop_mode_switch")
+                    )
+                }
+            }
+
             // JS Management (Fast/Balanced vs Slower/Enhanced Security)
             SettingsSection(title = "JS MANAGEMENT") {
                 JsSecurityOptionRow(
@@ -316,25 +351,39 @@ fun SettingsScreen(
 
             // Data Management
             SettingsSection(title = "DATA & PRIVACY") {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(14.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    OutlinedButton(
-                        onClick = onClearHistory,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("Clear History")
+                        OutlinedButton(
+                            onClick = onClearHistory,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Clear History")
+                        }
+                        OutlinedButton(
+                            onClick = onClearSearchHistory,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("settings_clear_search_history_button")
+                        ) {
+                            Text("Clear Searches")
+                        }
                     }
                     OutlinedButton(
                         onClick = onClearAllClearances,
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Reset Vault", color = MaterialTheme.colorScheme.error)
+                        Text("Reset Clearance Vault", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }

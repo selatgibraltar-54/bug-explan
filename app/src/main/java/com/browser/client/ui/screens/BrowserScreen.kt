@@ -12,31 +12,40 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Bookmarks
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -51,6 +60,7 @@ import com.browser.client.R
 import com.browser.client.engine.WebViewPool
 import com.browser.client.ui.BrowserOverlay
 import com.browser.client.ui.BrowserViewModel
+import com.browser.client.ui.PasskeyPromptState
 import com.browser.client.ui.components.OfflineErrorView
 import com.browser.client.ui.components.OmniboxBar
 import com.browser.client.ui.components.ReaderModeView
@@ -64,6 +74,11 @@ fun BrowserScreen(
     onRequestDefaultBrowser: () -> Unit
 ) {
     val context = LocalContext.current
+    DisposableEffect(context) {
+        viewModel.attachActivityContext(context)
+        onDispose { }
+    }
+
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val networkStatus by viewModel.networkStatus.collectAsStateWithLifecycle()
@@ -71,6 +86,7 @@ fun BrowserScreen(
     val pinnedBookmarks by viewModel.pinnedBookmarks.collectAsStateWithLifecycle()
     val allBookmarks by viewModel.allBookmarks.collectAsStateWithLifecycle()
     val recentHistory by viewModel.recentHistory.collectAsStateWithLifecycle()
+    val searchHistory by viewModel.searchHistory.collectAsStateWithLifecycle()
     val downloadItems by viewModel.downloadItems.collectAsStateWithLifecycle()
     val activeDownloadCount by viewModel.activeDownloadCount.collectAsStateWithLifecycle()
 
@@ -143,10 +159,15 @@ fun BrowserScreen(
                         }
                     },
                     onOpenVault = { viewModel.openOverlay(BrowserOverlay.CLEARANCE_VAULT) },
-                    onOpenBookmarksHistory = { viewModel.openOverlay(BrowserOverlay.BOOKMARKS_HISTORY) },
+                    onOpenBookmarksHistory = { viewModel.openBookmarksHistory(initialTab = 0) },
+                    onOpenSearchHistory = { viewModel.openBookmarksHistory(initialTab = 2) },
                     onOpenDownloads = { viewModel.openOverlay(BrowserOverlay.DOWNLOADS) },
+                    onOpenPasswordManager = { viewModel.openGooglePasswordManager() },
                     onOpenCustomizeStarter = { viewModel.openOverlay(BrowserOverlay.CUSTOMIZE_STARTER) },
-                    onOpenSettings = { viewModel.openOverlay(BrowserOverlay.SETTINGS) }
+                    onOpenSettings = { viewModel.openOverlay(BrowserOverlay.SETTINGS) },
+                    searchHistory = searchHistory,
+                    onRunSearchQuery = viewModel::runSearchFromHistory,
+                    onDeleteSearchHistoryItem = viewModel::deleteSearchHistoryItem
                 )
             },
             bottomBar = {
@@ -295,11 +316,19 @@ fun BrowserScreen(
             BookmarksHistoryScreen(
                 bookmarks = allBookmarks,
                 history = recentHistory,
+                searchHistory = searchHistory,
+                initialTab = uiState.bookmarksHistoryInitialTab,
                 onBack = viewModel::closeOverlay,
                 onOpenUrl = { url -> viewModel.loadUrlInActiveTab(url) },
+                onAddBookmark = viewModel::addCustomBookmark,
+                onUpdateBookmark = viewModel::updateBookmark,
+                onToggleBookmarkPin = viewModel::toggleBookmarkPinned,
                 onDeleteBookmark = viewModel::removeBookmark,
                 onDeleteHistoryItem = viewModel::deleteHistoryItem,
-                onClearHistory = viewModel::clearHistory
+                onClearHistory = viewModel::clearHistory,
+                onRunSearchQuery = viewModel::runSearchFromHistory,
+                onDeleteSearchHistoryItem = viewModel::deleteSearchHistoryItem,
+                onClearSearchHistory = viewModel::clearSearchHistory
             )
         }
 
@@ -335,12 +364,14 @@ fun BrowserScreen(
                 onSetThemeMode = viewModel::setThemeMode,
                 onSetAdBlocker = viewModel::setAdBlockerEnabled,
                 onSetDataSaver = viewModel::setDataSaverEnabled,
+                onSetDefaultDesktopMode = viewModel::setDefaultDesktopMode,
                 onSetJsSecurityMode = viewModel::setJsSecurityMode,
                 onSetAutoFlush = viewModel::setAutoFlush,
                 onSetAutoRehydrate = viewModel::setAutoRehydrate,
                 onSetStripWebViewToken = viewModel::setStripWebViewToken,
                 onSetPerDomainUaLock = viewModel::setPerDomainUaLock,
                 onClearHistory = viewModel::clearHistory,
+                onClearSearchHistory = viewModel::clearSearchHistory,
                 onClearAllClearances = viewModel::clearAllClearances
             )
         }
@@ -351,6 +382,7 @@ fun BrowserScreen(
                 clearanceEntity = if (activeTab.isIncognito) null else viewModel.getClearanceEntityForActiveTab(),
                 onDismiss = viewModel::closeOverlay,
                 onToggleDesktopMode = viewModel::toggleDesktopMode,
+                onOpenPasswordManager = { viewModel.openGooglePasswordManager() },
                 onRevokeAndReload = { domain ->
                     viewModel.revokeClearance(domain)
                     viewModel.reloadOrStop()
@@ -359,7 +391,99 @@ fun BrowserScreen(
                 onOpenVault = { viewModel.openOverlay(BrowserOverlay.CLEARANCE_VAULT) }
             )
         }
+
+        uiState.passkeyPrompt?.let { prompt ->
+            PasskeyPromptDialog(
+                prompt = prompt,
+                onOpenGooglePasswordManager = {
+                    viewModel.confirmOpenGooglePasswordManagerFromPrompt(useWebPortal = false)
+                },
+                onOpenWebPortal = {
+                    viewModel.confirmOpenGooglePasswordManagerFromPrompt(useWebPortal = true)
+                },
+                onDismiss = viewModel::dismissPasskeyPrompt
+            )
+        }
     }
+}
+
+@Composable
+private fun PasskeyPromptDialog(
+    prompt: PasskeyPromptState,
+    onOpenGooglePasswordManager: () -> Unit,
+    onOpenWebPortal: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val actionTitle = when {
+        prompt.isIncognito -> "Passkey Requested in Incognito"
+        prompt.mode == "create" -> "Create Passkey"
+        else -> "Verify with Passkey"
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Rounded.Key,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        title = { Text(actionTitle) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = if (prompt.openedPasswordManagerAutomatically) {
+                        "${prompt.originHost} asked to verify with a passkey. Google Password Manager was opened for this request."
+                    } else {
+                        "${prompt.originHost} requested passkey verification."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (prompt.reason.isNotBlank()) {
+                    Text(
+                        text = prompt.reason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Button(
+                    onClick = onOpenGooglePasswordManager,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("passkey_open_gpm_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Key,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Open Google Password Manager")
+                }
+                OutlinedButton(
+                    onClick = onOpenWebPortal,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("passkey_open_web_button")
+                ) {
+                    Text("Open passwords.google.com")
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.testTag("passkey_dismiss_button")
+            ) {
+                Text("Dismiss")
+            }
+        }
+    )
 }
 
 @Composable
